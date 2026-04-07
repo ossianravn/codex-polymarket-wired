@@ -1,0 +1,20 @@
+watchlists:
+  - name: macro
+    description: macro and rates markets
+    markets:
+      - identifier_type: slug
+        identifier: example-fed-cut-market
+        move_threshold_pct_points: 3.0
+        spread_threshold_cents: 4
+        include_related_markets: true
+        include_comments: true
+
+  - name: politics
+    description: election and policy markets
+    markets:
+      - identifier_type: slug
+        identifier: example-election-market
+        move_threshold_pct_points: 5.0
+        spread_threshold_cents: 6
+        include_related_markets: true
+        include_comments: true

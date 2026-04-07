@@ -1,0 +1,63 @@
+{
+  "mcpServers": {
+    "polymarket": {
+      "command": "npx",
+      "args": [
+        "tsx",
+        "./servers/polymarket-mcp/src/server.ts"
+      ],
+      "cwd": ".",
+      "env": {
+        "POLYMARKET_CLOB_URL": "https://clob.polymarket.com",
+        "POLYMARKET_GAMMA_URL": "https://gamma-api.polymarket.com",
+        "POLYMARKET_DATA_URL": "https://data-api.polymarket.com",
+        "POLYMARKET_CHAIN_ID": "137",
+        "POLYMARKET_SIGNATURE_TYPE": "0",
+        "POLYMARKET_AUTO_DERIVE_API_CREDS": "true",
+        "POLYMARKET_PYTHON_BIN": "python3",
+        "POLYMARKET_PY_HELPER_PATH": "./servers/polymarket-mcp/helpers/trading_helper.py",
+        "POLYMARKET_ALERT_CACHE_PATH": "./.cache/polymarket-alerts.json"
+      },
+      "env_vars": [
+        "POLYMARKET_PRIVATE_KEY",
+        "POLYMARKET_API_KEY",
+        "POLYMARKET_API_SECRET",
+        "POLYMARKET_API_PASSPHRASE",
+        "POLYMARKET_FUNDER",
+        "POLYMARKET_PROXY_ADDRESS",
+        "POLYMARKET_ENABLE_TRADING",
+        "POLYMARKET_REQUIRE_PREVIEW",
+        "POLYMARKET_REQUIRE_GEOBLOCK_CHECK",
+        "BUILDER_API_KEY",
+        "BUILDER_SECRET",
+        "BUILDER_PASSPHRASE",
+        "BUILDER_REMOTE_SIGNER_URL",
+        "BUILDER_REMOTE_SIGNER_TOKEN",
+        "TAVILY_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "NEWSAPI_API_KEY"
+      ],
+      "enabled_tools": [
+        "search_markets",
+        "get_market_snapshot",
+        "get_orderbook",
+        "get_price_history",
+        "get_recent_trades",
+        "get_open_orders",
+        "get_positions",
+        "get_rewards_status",
+        "get_live_alerts",
+        "preview_limit_order",
+        "preview_marketable_order",
+        "submit_previewed_order",
+        "cancel_orders",
+        "cancel_market_orders",
+        "cancel_all_orders"
+      ],
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 90,
+      "required": false,
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,13 @@
+trading_enabled: true
+require_preview_before_submit: true
+require_geoblock_check: true
+max_single_order_usdc: 10
+max_per_market_usdc: 25
+max_gross_exposure_usdc: 100
+max_daily_loss_usdc: 10
+max_open_orders: 10
+avoid_markets_resolving_within_hours: 2
+cancel_stale_orders_after_minutes: 30
+blocked_tags:
+  - sports_live
+  - novelty_low_liquidity

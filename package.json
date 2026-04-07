@@ -1,0 +1,31 @@
+{
+  "name": "codex-polymarket",
+  "private": true,
+  "version": "0.1.0",
+  "description": "skill-first codex plugin scaffold for polymarket research and guarded trading",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "servers/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev:mcp": "tsx ./servers/polymarket-mcp/src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test ./tests/**/*.test.ts",
+    "setup:python-helper": "python3 -m pip install -r ./servers/polymarket-mcp/helpers/requirements.txt",
+    "smoke:mcp": "tsx ./scripts/smoke-mcp.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.4.1",
+    "ethers": "^5.8.0",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  }
+}

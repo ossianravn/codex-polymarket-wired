@@ -1,0 +1,9 @@
+min_edge_pct_points: 3.0
+min_liquidity_usdc: 10000
+max_spread_cents_for_aggressive_entry: 2
+prefer_limit_orders: true
+default_limit_order_type: GTC
+default_marketable_order_type: FAK
+default_max_slippage_bps: 150
+require_two_sided_evidence: true
+require_related_market_check: true

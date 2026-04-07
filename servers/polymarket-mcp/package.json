@@ -1,0 +1,6 @@
+{
+  "name": "@codex-polymarket/polymarket-mcp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module"
+}
