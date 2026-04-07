@@ -1,7 +1,7 @@
 {
   "name": "codex-polymarket",
   "version": "0.1.0",
-  "description": "polymarket classification, research, and guarded trading workflows for codex. use when codex needs to classify and triage polymarket markets, analyze market structure or resolution risk, perform deep market research, review positions and open orders, draft trade strategies, or connect to a polymarket mcp server for live market data and manual execution.",
+  "description": "polymarket classification, research, and guarded trading workflows for codex. use when codex needs to classify and triage polymarket markets, analyze market structure or resolution risk, perform deep market research, review positions and open orders, draft trade strategies, or connect to a polymarket mcp server for live market data and manual execution. for rigorous fair-value modeling, pair it with actuarial-forecasting when available.",
   "author": {
     "name": "Ossian Ravn",
     "url": "https://github.com/ossianravn"
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "Polymarket",
     "shortDescription": "classify markets, analyze odds, and draft guarded trades",
-    "longDescription": "classify and triage polymarket markets, analyze odds, monitor watchlists, review portfolio risk, draft execution plans, and connect to a guarded polymarket mcp server for market data and manual trading.",
+    "longDescription": "classify and triage polymarket markets, analyze odds, monitor watchlists, review portfolio risk, draft execution plans, and connect to a guarded polymarket mcp server for market data and manual trading. for explicit probability modeling and fair-value work, pair the research and strategy skills with actuarial-forecasting when that skill is installed, or use https://github.com/ossianravn/actuarial-forecasting as the fallback reference.",
     "developerName": "Ossian Ravn",
     "category": "Productivity",
     "capabilities": [

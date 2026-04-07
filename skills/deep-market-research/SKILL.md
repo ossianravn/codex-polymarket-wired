@@ -9,6 +9,8 @@ Blend Polymarket data with any available external research tools or connectors.
 
 For expensive or ambiguous names, consider spawning narrow read-only subagents such as `rules_auditor`, `catalyst_researcher`, `microstructure_analyst`, and `related_market_mapper`, then consolidate their outputs before writing the final synthesis.
 
+For explicit probability modeling, fair-value ranges, scenario weighting, or visible numerical anchors, use `actuarial-forecasting` when that skill is installed. If it is not available in the local Codex environment, use the public fallback at [ossianravn/actuarial-forecasting](https://github.com/ossianravn/actuarial-forecasting/blob/main/SKILL.md).
+
 ## workflow
 
 1. Resolve the target market.
@@ -20,6 +22,7 @@ For expensive or ambiguous names, consider spawning narrow read-only subagents s
    - current news or research if web/connectors are available
    - related markets or cross-market signals
 4. Estimate a fair-value range in percentage points.
+   - If the market needs a real forecast rather than a narrative memo, hand off to `actuarial-forecasting` for the numerical model and then bring the result back into this synthesis.
 5. Compare the fair-value range with the live implied probability.
 6. State the strongest reasons the market could still be right.
 7. Persist the finished work when the state tools are available.
@@ -32,6 +35,7 @@ Always distinguish:
 - **observed** market data
 - **external evidence**
 - **your inference**
+- **forecast model output** when `actuarial-forecasting` is used
 
 ## output structure
 
@@ -67,5 +71,6 @@ Always distinguish:
 
 - Do not place trades here.
 - If no external research tools are available, say that clearly.
+- For rigorous fair-value work, visible scenario math, or threshold/range pricing, hand off to `actuarial-forecasting` instead of improvising percentages.
 - For broad scans or multi-market ranking, use `opportunity-classifier` first.
 - If the user wants sizing or entries, hand off to `strategy-draft`.
