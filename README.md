@@ -1,28 +1,86 @@
 # codex-polymarket
 
-A **skill-first Codex plugin prototype** for Polymarket watchlist triage, market classification, research, analysis, guarded trade previews, and scheduled automation.
+`codex-polymarket` is a skill-first Codex plugin for researching Polymarket markets, classifying opportunities, tracking local state, reviewing portfolio risk, and preparing guarded trades.
 
-This repo now includes a working MCP server prototype rather than only a scaffold. Public reads are implemented in TypeScript with direct HTTP calls to Polymarket's public APIs. Authenticated trading is bridged through a small Python helper that uses Polymarket's official Python CLOB client.
+This repository contains a working MCP server, a local SQLite state store, a strategy engine, Codex skills, watcher/executor daemons, and automation examples. The intended operating model is:
 
-## What is included
+1. discover or classify markets,
+2. do research and strategy work,
+3. create a guarded preview,
+4. submit only when explicitly intended.
 
-- `.codex-plugin/plugin.json` — plugin manifest
-- `.mcp.json` — MCP server registration for the bundled Polymarket MCP server
-- `skills/` — reusable Codex skills for opportunity classification, research, strategy, order tickets, risk review, and automations
-- `servers/polymarket-mcp/` — working MCP server, tool schemas, and Python trading helper
-- `packages/polymarket-core/` — shared API wrappers, normalization, preview storage, and helper utilities
-- `packages/policy-engine/` — risk limit loading and trade-policy evaluation, including thesis-level caps
-- `packages/state-store/` — local SQLite source of truth for markets, alerts, research, classifications, thesis links, portfolio snapshots, previews, and orders
-- `packages/strategy-engine/` — state-driven strategy candidate ranking, thesis-aware suppression, and execution queue generation
-- `services/` — watcher/executor services, including a poll-based watcher and a stateful executor that consume SQLite directly
-- `configs/` — watchlist, classification, risk-limit, and strategy-policy templates
-- `examples/automations/` — prompt files to paste into the Codex app automation UI
-- `.codex/agents/` — project-scoped subagents for rules, catalysts, microstructure, linked-market mapping, and portfolio overlap
-- `docs/` — architecture notes, MCP tool summary, automation guidance, and relevant Polymarket repos
+It is not a blind auto-trader. The repo is built around a preview-first, stateful, auditable workflow.
 
-## What works now
+## What This Repo Contains
 
-The repo now has a durable local state layer. Live reads, watcher scans, research runs, classifications, thesis links, portfolio snapshots, previews, and submitted orders can all land in the same SQLite database.
+- `.codex-plugin/plugin.json`
+  The Codex plugin manifest.
+- `.mcp.json`
+  MCP server registration for the bundled Polymarket server.
+- `skills/`
+  User-facing Codex skills for watchlist scanning, classification, research, strategy, order tickets, and portfolio review.
+- `servers/polymarket-mcp/`
+  The MCP server and the Python trading helper used for authenticated trading actions.
+- `packages/polymarket-core/`
+  Shared Polymarket HTTP clients, normalization, preview handling, and runtime config loading.
+- `packages/policy-engine/`
+  Risk-limit and execution-policy checks, including thesis-level caps.
+- `packages/state-store/`
+  Local SQLite source of truth for market state, research, classifications, thesis links, portfolio snapshots, previews, and orders.
+- `packages/strategy-engine/`
+  Read-only state-driven ranking and execution-queue generation.
+- `packages/research-engine/`
+  Persistence helpers for research syntheses and developments.
+- `services/watcher-daemon/`
+  Poll-based watcher that persists alerts into SQLite and mirrors alerts to the legacy JSON cache.
+- `services/executor-daemon/`
+  Stateful executor loop that syncs venue state and derives a deterministic execution queue.
+- `configs/`
+  Watchlist, classification, strategy, and risk policy files.
+- `examples/automations/`
+  Codex automation prompt templates.
+- `.codex/agents/`
+  Project-scoped specialist subagent definitions.
+- `docs/`
+  Supporting architecture and operational documentation.
+
+## Core Capabilities
+
+### Market reads
+
+- search and resolve markets
+- fetch normalized market snapshots
+- inspect live orderbooks
+- fetch price history
+- inspect recent trade flow
+- inspect authenticated open orders
+- inspect positions
+- inspect rewards or order scoring context
+- read cached watcher alerts
+
+### Stateful research and orchestration
+
+- persist market snapshots into SQLite
+- record structured developments and catalysts
+- record research syntheses and evidence
+- record opportunity classifications
+- record thesis links between related markets
+- inspect state summaries and per-market state
+- compute portfolio and thesis-level exposure summaries
+- derive ranked strategy candidates and execution queues from persisted state
+
+### Guarded trading
+
+- preview limit orders
+- preview marketable orders
+- persist previews
+- submit only from a preview
+- persist submitted orders
+- cancel specific orders, market orders, or all orders
+
+## MCP Tool Surface
+
+The bundled MCP server currently exposes:
 
 ### Read tools
 
@@ -31,7 +89,7 @@ The repo now has a durable local state layer. Live reads, watcher scans, researc
 - `get_orderbook`
 - `get_price_history`
 - `get_recent_trades`
-- `get_open_orders` *(requires auth)*
+- `get_open_orders`
 - `get_positions`
 - `get_rewards_status`
 - `get_live_alerts`
@@ -54,61 +112,100 @@ The repo now has a durable local state layer. Live reads, watcher scans, researc
 - `cancel_market_orders`
 - `cancel_all_orders`
 
-## Execution model
+The schema source of truth is [`servers/polymarket-mcp/src/tool-specs.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/servers/polymarket-mcp/src/tool-specs.ts).
 
-This repo is intentionally **preview-first**.
+## Architecture In Plain English
 
-1. Use a skill or direct MCP call to analyze the market.
-2. Generate a preview with `preview_limit_order` or `preview_marketable_order`.
-3. Review policy warnings, balance checks, tick-size normalization, thesis exposure checks, and execution notes.
-4. Submit only with `submit_previewed_order`.
+There are four main layers:
 
-This keeps the default UX aligned with "think, show, then act" rather than one-shot trading.
+1. Skills
+   Skills are the human-facing orchestration layer. They decide how to use MCP tools for watchlist scans, classification, research, strategy drafting, and portfolio review.
 
-A good upstream skill stack is:
+2. MCP server
+   The MCP layer exposes live reads, state tools, and guarded trading tools to Codex.
+
+3. State store
+   SQLite is the durable memory for the repo. It keeps append-only market snapshots plus structured research, classifications, thesis links, alerts, previews, orders, and portfolio snapshots.
+
+4. Strategy engine
+   The strategy engine reads only persisted local state and produces ranked candidates plus an execution queue. It is where thesis-aware suppression and queue generation happen.
+
+The current operating shape is:
 
 ```txt
-watchlist-scan -> opportunity-classifier -> market-memo / deep-market-research -> strategy-draft -> order-ticket
+watchlist-scan
+  -> opportunity-classifier
+  -> market-memo / deep-market-research
+  -> strategy-draft
+  -> order-ticket
+  -> preview_limit_order / preview_marketable_order
+  -> submit_previewed_order
 ```
 
-## Architecture
+## State Model
 
-### Skills
-Use Codex skills for:
-- opportunity classification and watchlist triage
-- market memos
-- deep market research
-- strategy drafts
-- order tickets
-- portfolio risk review
-- watchlist scans
-- resolution watch
-- maker rewards review
+By default the local database lives at:
 
-Suggested stack:
-`opportunity-classifier -> market-memo / deep-market-research -> strategy-draft -> order-ticket`
+```txt
+state/polymarket.sqlite
+```
 
-### MCP server
-Use the MCP layer for:
-- live Polymarket reads
-- previewable execution
-- cancellation tools
-- cached watcher alerts
-- persisted local state summaries
-- thesis and portfolio risk inspection
+Override it with:
 
-### Watcher / executor split
-Use scheduled Codex app automations for recurring opportunity triage, research, and monitoring.
-The watcher daemon now has a poll-based implementation that persists alert state into SQLite and mirrors it into the legacy JSON cache for compatibility.
-The executor daemon now consumes persisted classifications, research runs, thesis links, portfolio snapshots, previews, and orders directly from SQLite, syncs live open orders and positions back into the local state store when credentials are available, and produces a deterministic execution queue.
-Use the watcher/executor services later for anything truly real-time such as websocket ingestion, quote maintenance, or heartbeat-based safety loops.
+```env
+POLYMARKET_STATE_DB_PATH=state/polymarket.sqlite
+```
 
-### Recommended skill flow
-Use the new upstream triage layer like this:
-- `opportunity-classifier` -> `market-memo` for quick summaries
-- `opportunity-classifier` -> `deep-market-research` for A/B names that need fair-value work
-- `strategy-draft` only after research or when a prior already exists
-- `order-ticket` only for guarded execution after strategy work
+The state store persists:
+
+- canonical market records
+- append-only market snapshots
+- watcher alerts
+- developments and catalysts
+- research runs and evidence items
+- classifications
+- thesis links
+- portfolio snapshots and positions
+- order previews
+- submitted orders
+- automation runs
+- agent runs
+
+This lets the repo behave like a stateful research/execution assistant instead of restarting from zero on every prompt.
+
+## Thesis-Aware Risk Model
+
+The repo does not treat each market in isolation.
+
+A thesis is a shared narrative or correlated risk bucket such as:
+- one election cluster,
+- one macro path,
+- one corporate delivery narrative,
+- one cabinet formation process.
+
+Markets can be linked to the same thesis key. The strategy engine and preview policy checks then use that to:
+
+- cap total thesis exposure,
+- cap the number of active markets per thesis,
+- suppress weaker sibling opportunities,
+- penalize priority as thesis exposure rises,
+- block new previews when the thesis budget is already exhausted.
+
+This matters because several individually attractive contracts can still represent the same underlying bet.
+
+## Requirements
+
+### Node
+
+Use a modern Node version with built-in `node:sqlite` support. In practice, this means Node 22+.
+
+`node:sqlite` is still experimental in current Node releases, so you should expect the standard experimental warning in local runs.
+
+### Python
+
+Authenticated trading paths depend on the Python helper in [`servers/polymarket-mcp/helpers/trading_helper.py`](C:/CodexApp/poly-plugin/codex-polymarket-wired/servers/polymarket-mcp/helpers/trading_helper.py).
+
+Read-only market research works without trading credentials, but live authenticated order inspection, scoring, submission, and cancellation depend on Python plus the helper requirements.
 
 ## Setup
 
@@ -118,82 +215,101 @@ Use the new upstream triage layer like this:
 npm install
 ```
 
-### 2. Install the Python trading helper dependencies
-
-```bash
-npm run setup:python-helper
-```
-
-This installs the packages listed in `servers/polymarket-mcp/helpers/requirements.txt`.
-
-### 3. Configure environment variables
+### 2. Create the environment file
 
 ```bash
 cp .env.example .env
 ```
 
-Then fill in the values you need.
+On Windows, copy the file manually if you prefer.
 
-For read-only research, you can leave trading credentials blank.
-For live authenticated trading, set at least one of these modes:
+### 3. Install Python helper dependencies
 
-#### Mode A: full CLOB API credentials already available
+```bash
+npm run setup:python-helper
+```
+
+If `python3` is not the correct interpreter on your machine, set `POLYMARKET_PYTHON_BIN` in `.env` to the full path of a working `python.exe`.
+
+### 4. Configure environment variables
+
+The environment template lives at [`\.env.example`](C:/CodexApp/poly-plugin/codex-polymarket-wired/.env.example).
+
+Important variables:
+
+- `POLYMARKET_PRIVATE_KEY`
+- `POLYMARKET_API_KEY`
+- `POLYMARKET_API_SECRET`
+- `POLYMARKET_API_PASSPHRASE`
+- `POLYMARKET_FUNDER`
+- `POLYMARKET_PROXY_ADDRESS`
+- `POLYMARKET_SIGNATURE_TYPE`
+- `POLYMARKET_AUTO_DERIVE_API_CREDS`
+- `POLYMARKET_ENABLE_TRADING`
+- `POLYMARKET_REQUIRE_PREVIEW`
+- `POLYMARKET_REQUIRE_GEOBLOCK_CHECK`
+- `POLYMARKET_PYTHON_BIN`
+- `POLYMARKET_PY_HELPER_PATH`
+- `POLYMARKET_ALERT_CACHE_PATH`
+- `POLYMARKET_STATE_DB_PATH`
+
+Optional external research provider variables:
+
+- `TAVILY_API_KEY`
+- `PERPLEXITY_API_KEY`
+- `NEWSAPI_API_KEY`
+
+Optional builder-mode variables:
+
+- `BUILDER_API_KEY`
+- `BUILDER_SECRET`
+- `BUILDER_PASSPHRASE`
+- `BUILDER_REMOTE_SIGNER_URL`
+- `BUILDER_REMOTE_SIGNER_TOKEN`
+
+### 5. Choose an auth mode
+
+#### Mode A: full CLOB API credentials
+
+Fill:
+
 - `POLYMARKET_API_KEY`
 - `POLYMARKET_API_SECRET`
 - `POLYMARKET_API_PASSPHRASE`
 
 #### Mode B: derive API credentials from a signer
+
+Fill:
+
 - `POLYMARKET_PRIVATE_KEY`
-- optionally `POLYMARKET_FUNDER`
-- keep `POLYMARKET_AUTO_DERIVE_API_CREDS=true`
+- `POLYMARKET_FUNDER` if needed for your account mode
+- `POLYMARKET_SIGNATURE_TYPE`
+- `POLYMARKET_AUTO_DERIVE_API_CREDS=true`
 
-You must also explicitly opt into writes:
+### 6. Review policy files
 
-```env
-POLYMARKET_ENABLE_TRADING=true
-```
+Review these files before live usage:
 
-### 4. Review policy limits and state path
+- [`configs/risk-limits.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/risk-limits.yaml)
+- [`configs/classification-policies.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/classification-policies.yaml)
+- [`configs/strategy-policies.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/strategy-policies.yaml)
+- [`configs/watchlists.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/watchlists.yaml)
 
-Edit:
-- `configs/risk-limits.yaml`
-- `configs/watchlists.yaml`
-- `configs/classification-policies.yaml`
-- `configs/strategy-policies.yaml`
+Important risk controls include:
 
-The default local SQLite database path is:
-
-```env
-POLYMARKET_STATE_DB_PATH=state/polymarket.sqlite
-```
-
-The policy engine currently checks:
 - trading enable flag
-- geoblock requirement flag
+- preview-before-submit requirement
+- geoblock checks
 - max single-order notional
 - max per-market exposure
 - max per-thesis exposure
 - max markets per thesis
 - max gross exposure
-- max open-order count
-- markets nearing resolution
+- max open orders
+- near-resolution blocking
 - blocked tags
 
-`configs/classification-policies.yaml` is read by the `opportunity-classifier` skill and automation prompts. It is advisory at the skill layer and is not yet enforced by the TypeScript policy engine.
-
-The opportunity-classifier policy file adds:
-- allowed or blocked structural types
-- score thresholds for modelability, tradability, and ambiguity
-- handoff defaults for memo, research, strategy, or execution
-
-`configs/strategy-policies.yaml` now also controls:
-- max thesis exposure for new entries
-- max markets per thesis
-- whether lower-ranked same-thesis entries are suppressed
-- whether active same-thesis orders should block fresh entries
-- the penalty applied to priority scores as thesis exposure grows
-
-### 5. Start the MCP server locally
+### 7. Start the MCP server
 
 ```bash
 npm run dev:mcp
@@ -201,42 +317,162 @@ npm run dev:mcp
 
 The server speaks MCP over stdio.
 
-### 6. Optionally run the watcher once
+## Useful Commands
+
+### Validation
+
+```bash
+npm run typecheck
+npm test
+npm run smoke:mcp
+```
+
+### Watcher
 
 ```bash
 npm run watcher:once
+npm run dev:watcher
 ```
 
-### 7. Inspect the local state summary
+### State inspection
 
 ```bash
 npm run state:summary
-```
-
-### 8. Inspect thesis and portfolio risk
-
-```bash
-npm run state:summary
-```
-
-Or via MCP:
-- `get_market_state`
-- `get_portfolio_risk_summary`
-
-### 9. Inspect the derived execution queue
-
-```bash
 npm run state:queue
 ```
 
-### 10. Run the executor once in dry-run mode
+### Executor
 
 ```bash
 npm run executor:once -- --json
+npm run dev:executor
 ```
 
-### 11. Run the startup smoke test
+## Watcher And Executor
 
-```bash
-npm run smoke:mcp
+### Watcher daemon
+
+The watcher is currently a polling watcher. It compares the latest live snapshot against prior persisted state, emits structured alerts, writes them to SQLite, and mirrors them into the legacy JSON alert cache for compatibility.
+
+### Executor daemon
+
+The executor is stateful. In dry-run mode it can:
+
+- sync live open orders into SQLite when credentials exist
+- sync live positions into portfolio snapshots when an owner address is configured
+- reconcile locally known orders that are no longer on venue
+- build a deterministic queue for research refresh, strategy work, preview preparation, live-order monitoring, and stale-order cleanup
+
+With `--apply-cancels`, it can issue explicit stale-order cancellations and write the resulting lifecycle updates back into state.
+
+## Skills And Automations
+
+The repo is designed so that skills are the main automation surface.
+
+Common roles:
+
+- `watchlist-scan`
+  Detect material market changes.
+- `opportunity-classifier`
+  Score and triage markets before deeper work.
+- `market-memo`
+  Write a compact single-market memo.
+- `deep-market-research`
+  Build a fair-value view and evidence map.
+- `strategy-draft`
+  Convert thesis plus market state into an execution plan.
+- `portfolio-risk-review`
+  Review positions, open orders, and concentration.
+- `order-ticket`
+  Prepare an execution-ready order plan without directly placing it.
+
+Recommended recurring discovery chain:
+
+```txt
+watchlist-scan -> opportunity-classifier -> deep-market-research
 ```
+
+For state-writing automations, prefer local project mode rather than isolated worktrees. Worktrees are good for code changes, but they fragment a local SQLite database.
+
+## Project-Scoped Subagents
+
+The repo includes project-scoped subagent definitions under [`\.codex/agents`](C:/CodexApp/poly-plugin/codex-polymarket-wired/.codex/agents).
+
+Current specialists:
+
+- `rules_auditor`
+- `catalyst_researcher`
+- `microstructure_analyst`
+- `related_market_mapper`
+- `portfolio_correlator`
+
+Use them for bounded read-heavy work such as:
+
+- ambiguous resolution criteria
+- catalyst mapping
+- microstructure-sensitive names
+- related-market inconsistency checks
+- overlap with existing positions
+
+The parent thread should still own final reconciliation and persistence into SQLite.
+
+## Safety Model
+
+This repo is intentionally conservative by default.
+
+- read-heavy usage works without trading credentials
+- previews are separated from submits
+- policy checks run before preview approval
+- thesis-level limits are checked before new orders are allowed
+- unattended Codex automations should stay read-heavy
+- direct background execution loops are separate from Codex app automations
+
+The intended UX is:
+
+1. research the market,
+2. classify and rank it,
+3. check portfolio and thesis context,
+4. create a preview,
+5. inspect warnings and policy decisions,
+6. submit only if you explicitly want live execution.
+
+## What Has Been Verified In This Repo
+
+This repo has local verification coverage for:
+
+- TypeScript compilation
+- MCP startup smoke test
+- core orderbook parsing regressions
+- preview helper normalization regressions
+- strategy-engine queue and thesis-suppression logic
+- state summary and execution queue scripts
+
+Live Polymarket behavior depends on your configured credentials, balances, allowances, and geoblock status.
+
+## Important Files
+
+- [`README.md`](C:/CodexApp/poly-plugin/codex-polymarket-wired/README.md)
+- [`servers/polymarket-mcp/src/server.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/servers/polymarket-mcp/src/server.ts)
+- [`servers/polymarket-mcp/src/tool-specs.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/servers/polymarket-mcp/src/tool-specs.ts)
+- [`packages/polymarket-core/src/index.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/packages/polymarket-core/src/index.ts)
+- [`packages/policy-engine/src/index.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/packages/policy-engine/src/index.ts)
+- [`packages/state-store/src/index.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/packages/state-store/src/index.ts)
+- [`packages/strategy-engine/src/index.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/packages/strategy-engine/src/index.ts)
+- [`services/watcher-daemon/src/index.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/services/watcher-daemon/src/index.ts)
+- [`services/executor-daemon/src/index.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/services/executor-daemon/src/index.ts)
+- [`configs/risk-limits.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/risk-limits.yaml)
+- [`configs/strategy-policies.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/strategy-policies.yaml)
+- [`configs/classification-policies.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/classification-policies.yaml)
+
+## Limitations And Next Steps
+
+This is still a prototype.
+
+Areas you may still want to harden:
+
+- durable audit logging beyond current SQLite records
+- more explicit migration/version handling for state schema changes
+- websocket-backed watcher ingestion
+- stronger authenticated reconciliation and venue error handling
+- builder-mode signing hardening if you use remote signing
+- broader automated end-to-end coverage around live order lifecycle changes

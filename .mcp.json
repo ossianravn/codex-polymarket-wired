@@ -49,6 +49,7 @@
         "get_positions",
         "get_rewards_status",
         "get_live_alerts",
+        "get_portfolio_risk_summary",
         "preview_limit_order",
         "preview_marketable_order",
         "submit_previewed_order",
@@ -61,7 +62,8 @@
         "get_execution_queue",
         "record_development",
         "record_research_synthesis",
-        "record_classification"
+        "record_classification",
+        "record_thesis_link"
       ],
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90,
