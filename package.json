@@ -14,7 +14,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test ./tests/**/*.test.ts",
     "setup:python-helper": "python3 -m pip install -r ./servers/polymarket-mcp/helpers/requirements.txt",
-    "smoke:mcp": "tsx ./scripts/smoke-mcp.ts"
+    "smoke:mcp": "tsx ./scripts/smoke-mcp.ts",
+    "dev:watcher": "tsx ./services/watcher-daemon/src/index.ts",
+    "watcher:once": "tsx ./services/watcher-daemon/src/index.ts --once",
+    "dev:executor": "tsx ./services/executor-daemon/src/index.ts",
+    "executor:once": "tsx ./services/executor-daemon/src/index.ts --once",
+    "state:summary": "tsx ./scripts/state-summary.ts",
+    "state:queue": "tsx ./scripts/execution-queue.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

@@ -15,8 +15,9 @@ Read `configs/watchlists.yaml` and summarize only material changes.
    - compare recent movement, spread, and comments
    - check for linked-market drift if requested
 3. Only surface items that cross configured thresholds.
-4. If the user wants prioritization, segmentation, or next-step recommendations for the changed names, hand off to `opportunity-classifier`.
-5. If nothing matters, say so briefly.
+4. If the local SQLite state is available, prefer `get_live_alerts`, `get_state_summary`, or `get_market_state` so the scan builds on prior runs instead of only the current thread context.
+5. If the user wants prioritization, segmentation, or next-step recommendations for the changed names, hand off to `opportunity-classifier`.
+6. If nothing matters, say so briefly.
 
 ## report format
 

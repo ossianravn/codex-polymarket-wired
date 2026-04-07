@@ -8,6 +8,8 @@ export interface RiskLimits {
   requireGeoblockCheck: boolean;
   maxSingleOrderUsd: number;
   maxPerMarketUsd: number;
+  maxPerThesisUsd: number;
+  maxMarketsPerThesis: number;
   maxGrossExposureUsd: number;
   maxDailyLossUsd: number;
   maxOpenOrders: number;
@@ -22,6 +24,8 @@ export interface PolicyContext {
   tags?: string[];
   orderNotionalUsd?: number;
   marketExposureUsd?: number;
+  thesisExposureUsd?: number;
+  thesisMarketCount?: number;
   grossExposureUsd?: number;
   openOrderCount?: number;
   resolvesWithinHours?: number;
@@ -46,6 +50,8 @@ export function defaultRiskLimits(): RiskLimits {
     requireGeoblockCheck: true,
     maxSingleOrderUsd: 100,
     maxPerMarketUsd: 250,
+    maxPerThesisUsd: 400,
+    maxMarketsPerThesis: 3,
     maxGrossExposureUsd: 1000,
     maxDailyLossUsd: 100,
     maxOpenOrders: 20,
@@ -82,6 +88,14 @@ export function normalizeRiskLimits(raw: Record<string, unknown> | null | undefi
     maxPerMarketUsd: toNumber(
       data.max_per_market_usdc ?? data.maxPerMarketUsd,
       defaults.maxPerMarketUsd
+    ),
+    maxPerThesisUsd: toNumber(
+      data.max_per_thesis_usdc ?? data.maxPerThesisUsd,
+      defaults.maxPerThesisUsd
+    ),
+    maxMarketsPerThesis: Math.max(
+      0,
+      Math.trunc(toNumber(data.max_markets_per_thesis ?? data.maxMarketsPerThesis, defaults.maxMarketsPerThesis))
     ),
     maxGrossExposureUsd: toNumber(
       data.max_gross_exposure_usdc ?? data.maxGrossExposureUsd,
@@ -160,6 +174,22 @@ export function evaluatePolicy(limits: RiskLimits, ctx: PolicyContext): PolicyDe
       code: "MAX_PER_MARKET",
       severity: "block",
       message: `Projected per-market exposure exceeds max_per_market_usdc (${limits.maxPerMarketUsd}).`
+    });
+  }
+
+  if ((ctx.thesisExposureUsd ?? 0) > limits.maxPerThesisUsd) {
+    warnings.push({
+      code: "MAX_PER_THESIS",
+      severity: "block",
+      message: `Projected thesis exposure exceeds max_per_thesis_usdc (${limits.maxPerThesisUsd}).`
+    });
+  }
+
+  if ((ctx.thesisMarketCount ?? 0) > limits.maxMarketsPerThesis) {
+    warnings.push({
+      code: "MAX_MARKETS_PER_THESIS",
+      severity: "block",
+      message: `Projected thesis market count exceeds max_markets_per_thesis (${limits.maxMarketsPerThesis}).`
     });
   }
 

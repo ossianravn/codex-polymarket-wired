@@ -7,6 +7,8 @@ description: perform deep research for a polymarket market, event, or thesis. us
 
 Blend Polymarket data with any available external research tools or connectors.
 
+For expensive or ambiguous names, consider spawning narrow read-only subagents such as `rules_auditor`, `catalyst_researcher`, `microstructure_analyst`, and `related_market_mapper`, then consolidate their outputs before writing the final synthesis.
+
 ## workflow
 
 1. Resolve the target market.
@@ -20,6 +22,9 @@ Blend Polymarket data with any available external research tools or connectors.
 4. Estimate a fair-value range in percentage points.
 5. Compare the fair-value range with the live implied probability.
 6. State the strongest reasons the market could still be right.
+7. Persist the finished work when the state tools are available.
+   - Call `record_research_synthesis` with the final thesis, fair-value range, and evidence map.
+   - Call `record_development` for any standalone catalysts or developments that should be queryable later outside the full memo.
 
 ## output requirements
 

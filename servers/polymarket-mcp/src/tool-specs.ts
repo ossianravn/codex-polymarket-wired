@@ -186,6 +186,272 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "get_state_summary",
+    access: "read",
+    description:
+      "Return a compact summary of the local SQLite state store, including counts and recent alerts, research runs, classifications, and previews.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 10 }
+      }
+    }
+  },
+  {
+    name: "get_market_state",
+    access: "read",
+    description:
+      "Return the stored state for a single market, including recent snapshots, alerts, developments, research runs, classifications, thesis links, portfolio positions, and previews.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        identifier_type: {
+          type: "string",
+          enum: ["slug", "condition_id", "token_id", "market_id"]
+        },
+        identifier: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }
+      },
+      required: ["identifier_type", "identifier"]
+    }
+  },
+  {
+    name: "get_portfolio_risk_summary",
+    access: "read",
+    description:
+      "Return persisted portfolio exposure, active-order notional, and thesis-level aggregation from the local SQLite state store.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }
+      }
+    }
+  },
+  {
+    name: "get_strategy_candidates",
+    access: "read",
+    description:
+      "Return ranked strategy candidates derived only from persisted SQLite state, including latest classifications, research runs, snapshots, and orders.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+        interest_tiers: {
+          type: "array",
+          items: { type: "string", enum: ["A", "B", "C", "AVOID"] },
+          maxItems: 4
+        },
+        include_waiting: { type: "boolean", default: false },
+        include_blocked: { type: "boolean", default: false }
+      }
+    }
+  },
+  {
+    name: "get_execution_queue",
+    access: "read",
+    description:
+      "Return the deterministic execution queue derived from persisted SQLite state. Use to see which markets need research refresh, strategy work, preview generation, monitoring, or stale-order cleanup.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+        include_waiting: { type: "boolean", default: false }
+      }
+    }
+  },
+  {
+    name: "record_development",
+    access: "write",
+    description:
+      "Persist a structured development or catalyst note for a market in the local SQLite state store.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        identifier_type: {
+          type: "string",
+          enum: ["slug", "condition_id", "token_id", "market_id"]
+        },
+        identifier: { type: "string", minLength: 1 },
+        title: { type: "string", minLength: 1, maxLength: 300 },
+        summary: { type: "string", minLength: 1, maxLength: 4000 },
+        source: { type: "string", minLength: 1, maxLength: 200 },
+        url: { type: "string", format: "uri" },
+        impact: {
+          type: "string",
+          enum: ["bullish", "bearish", "neutral", "unclear"],
+          default: "unclear"
+        },
+        importance: { type: "integer", minimum: 0, maximum: 100, default: 50 },
+        event_time: { type: "string", format: "date-time" },
+        discovered_at: { type: "string", format: "date-time" },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 20
+        },
+        notes: { type: "string", maxLength: 2000 },
+        payload: { type: "object", additionalProperties: true }
+      },
+      required: ["identifier_type", "identifier", "title", "summary", "source"]
+    }
+  },
+  {
+    name: "record_thesis_link",
+    access: "write",
+    description:
+      "Persist a thesis / correlation-cluster link for a market so the strategy and executor layers can aggregate correlated exposure.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        identifier_type: {
+          type: "string",
+          enum: ["slug", "condition_id", "token_id", "market_id"]
+        },
+        identifier: { type: "string", minLength: 1 },
+        thesis_key: { type: "string", minLength: 1, maxLength: 200 },
+        thesis_title: { type: "string", minLength: 1, maxLength: 300 },
+        confidence: { type: "number", minimum: 0, maximum: 100 },
+        is_primary: { type: "boolean", default: true },
+        created_at: { type: "string", format: "date-time" },
+        metadata: { type: "object", additionalProperties: true }
+      },
+      required: ["identifier_type", "identifier", "thesis_key"]
+    }
+  },
+  {
+    name: "record_research_synthesis",
+    access: "write",
+    description:
+      "Persist a completed research synthesis, fair-value range, and evidence map for a market in the local SQLite state store.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        identifier_type: {
+          type: "string",
+          enum: ["slug", "condition_id", "token_id", "market_id"]
+        },
+        identifier: { type: "string", minLength: 1 },
+        title: { type: "string", minLength: 1, maxLength: 300 },
+        question: { type: "string", minLength: 1, maxLength: 1000 },
+        thesis: { type: "string", minLength: 1, maxLength: 8000 },
+        supports_yes: {
+          type: "array",
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              source: { type: "string", minLength: 1, maxLength: 200 },
+              title: { type: "string", minLength: 1, maxLength: 300 },
+              url: { type: "string", format: "uri" },
+              summary: { type: "string", minLength: 1, maxLength: 4000 },
+              stance: { type: "string", minLength: 1, maxLength: 80 },
+              confidence: { type: "string", minLength: 1, maxLength: 40 }
+            },
+            required: ["source", "title", "summary", "stance", "confidence"]
+          }
+        },
+        supports_no: {
+          type: "array",
+          maxItems: 50,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              source: { type: "string", minLength: 1, maxLength: 200 },
+              title: { type: "string", minLength: 1, maxLength: 300 },
+              url: { type: "string", format: "uri" },
+              summary: { type: "string", minLength: 1, maxLength: 4000 },
+              stance: { type: "string", minLength: 1, maxLength: 80 },
+              confidence: { type: "string", minLength: 1, maxLength: 40 }
+            },
+            required: ["source", "title", "summary", "stance", "confidence"]
+          }
+        },
+        open_questions: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 500 },
+          maxItems: 50
+        },
+        fair_value_low: { type: "number" },
+        fair_value_base: { type: "number" },
+        fair_value_high: { type: "number" },
+        providers: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 120 },
+          maxItems: 20
+        },
+        notes: { type: "string", maxLength: 4000 },
+        skill_version: { type: "string", maxLength: 120 },
+        policy_version: { type: "string", maxLength: 120 },
+        model_id: { type: "string", maxLength: 120 },
+        prompt_hash: { type: "string", maxLength: 256 },
+        automation_name: { type: "string", maxLength: 200 },
+        thesis_key: { type: "string", minLength: 1, maxLength: 200 },
+        thesis_title: { type: "string", minLength: 1, maxLength: 300 },
+        thesis_confidence: { type: "number", minimum: 0, maximum: 100 },
+        created_at: { type: "string", format: "date-time" },
+        completed_at: { type: "string", format: "date-time" },
+        synthesis: { type: "object", additionalProperties: true }
+      },
+      required: ["identifier_type", "identifier", "title", "question", "thesis"]
+    }
+  },
+  {
+    name: "record_classification",
+    access: "write",
+    description:
+      "Persist a structured opportunity-classifier result and decision payload for a market in the local SQLite state store.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        identifier_type: {
+          type: "string",
+          enum: ["slug", "condition_id", "token_id", "market_id"]
+        },
+        identifier: { type: "string", minLength: 1 },
+        structural_type: { type: "string", maxLength: 120 },
+        category: { type: "string", maxLength: 120 },
+        horizon_bucket: { type: "string", maxLength: 80 },
+        pricing_status: { type: "string", maxLength: 80 },
+        modelability_score: { type: "number", minimum: 0, maximum: 100 },
+        tradability_score: { type: "number", minimum: 0, maximum: 100 },
+        resolution_ambiguity_score: { type: "number", minimum: 0, maximum: 100 },
+        attention_gap_score: { type: "number", minimum: 0, maximum: 100 },
+        cross_market_consistency_score: { type: "number", minimum: 0, maximum: 100 },
+        research_priority_score: { type: "number", minimum: 0, maximum: 100 },
+        trade_opportunity_score: { type: "number", minimum: 0, maximum: 100 },
+        confidence_score: { type: "number", minimum: 0, maximum: 100 },
+        interest_tier: { type: "string", maxLength: 40 },
+        reason_codes: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 120 },
+          maxItems: 50
+        },
+        disqualifiers: {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 120 },
+          maxItems: 50
+        },
+        thesis_key: { type: "string", minLength: 1, maxLength: 200 },
+        thesis_title: { type: "string", minLength: 1, maxLength: 300 },
+        thesis_confidence: { type: "number", minimum: 0, maximum: 100 },
+        decision: { type: "object", additionalProperties: true },
+        created_at: { type: "string", format: "date-time" }
+      },
+      required: ["identifier_type", "identifier", "decision"]
+    }
+  },
+  {
     name: "preview_limit_order",
     access: "write",
     description:

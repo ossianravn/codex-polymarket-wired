@@ -41,6 +41,12 @@ import {
   type RiskLimits
 } from "../../../packages/policy-engine/src/index.js";
 import { TOOLS } from "./tool-specs.js";
+import { openStateStore } from "../../../packages/state-store/src/index.js";
+import {
+  buildExecutionQueue,
+  listStrategyCandidates,
+  loadStrategyPolicies
+} from "../../../packages/strategy-engine/src/index.js";
 
 const server = new McpServer(
   {
@@ -149,6 +155,92 @@ async function currentLimits() {
   const config = loadRuntimeConfig();
   const limits = await loadRiskLimits(path.resolve(config.cwd, "configs/risk-limits.yaml"));
   return { config, limits, policyHash: computePolicyHash(limits) };
+}
+
+async function currentStrategyPolicies(config = loadRuntimeConfig()) {
+  const policies = await loadStrategyPolicies(path.resolve(config.cwd, "configs/strategy-policies.yaml"));
+  return { config, policies };
+}
+
+function currentStateStore(config = loadRuntimeConfig()) {
+  return openStateStore(config.stateDbPath);
+}
+
+async function resolveAndPersistMarket(
+  config: ReturnType<typeof loadRuntimeConfig>,
+  identifierType: "slug" | "condition_id" | "token_id" | "market_id",
+  identifier: string
+) {
+  const snapshot = await resolveMarketByIdentifier(config, identifierType, identifier, {
+    includeComments: false,
+    includeOrderbookSummary: true,
+    includeRelatedMarkets: false
+  });
+  const stateStore = currentStateStore(config);
+  const stored = stateStore.recordMarketSnapshot(snapshot);
+  return {
+    snapshot,
+    stateStore,
+    marketKey: stored.marketKey
+  };
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function orderRecordFromSubmitResult(
+  preview: ReturnType<typeof getPreview> extends infer T ? T : never,
+  result: Record<string, unknown>
+): {
+  orderId?: string;
+  side?: string;
+  status?: string;
+  orderKind?: string;
+  price?: number;
+  size?: number;
+  notionalUsd?: number;
+  payload: Record<string, unknown>;
+} {
+  const order = (result.order ?? result.result ?? result) as Record<string, unknown>;
+  const normalizedParams = (preview?.normalizedParams ?? {}) as Record<string, unknown>;
+  const submissionPayload = (preview?.submissionPayload ?? {}) as Record<string, unknown>;
+  const estimate = (normalizedParams.estimate ?? {}) as Record<string, unknown>;
+  const price =
+    numericValue(order.price) ??
+    numericValue(order.avgPrice) ??
+    numericValue(submissionPayload.price) ??
+    numericValue(submissionPayload.worst_price);
+  const size =
+    numericValue(order.size) ??
+    numericValue(order.original_size) ??
+    numericValue(order.amount) ??
+    numericValue(submissionPayload.size) ??
+    numericValue(submissionPayload.shares) ??
+    numericValue(estimate.totalShares);
+  const notionalUsd =
+    numericValue(order.notional) ??
+    numericValue(order.usdc_size) ??
+    numericValue(order.value) ??
+    numericValue(submissionPayload.budget_usdc) ??
+    numericValue(estimate.totalNotionalUsd) ??
+    (price !== undefined && size !== undefined ? Number((price * size).toFixed(6)) : undefined);
+
+  return {
+    orderId: firstString(order.orderID, order.order_id, order.id, order.orderId),
+    side: firstString(order.side, submissionPayload.side),
+    status: firstString(order.status, result.status, "submitted"),
+    orderKind: typeof preview?.orderKind === "string" ? preview.orderKind : undefined,
+    price,
+    size,
+    notionalUsd,
+    payload: result
+  };
 }
 
 async function geoblockIfNeeded(config: ReturnType<typeof loadRuntimeConfig>, limits: RiskLimits) {
@@ -329,6 +421,37 @@ async function exposureContext(
       warnings: [warn("EXPOSURE_CHECK_FAILED", `Unable to load current positions: ${String(error)}`)]
     };
   }
+}
+
+function thesisExposureContext(
+  config: ReturnType<typeof loadRuntimeConfig>,
+  marketSnapshot: MarketSnapshot,
+  incrementalNotionalUsd: number
+): { marketKey: string; thesisKey?: string; thesisExposureUsd?: number; thesisMarketCount?: number; warnings: PolicyWarning[] } {
+  const store = currentStateStore(config);
+  const { marketKey } = store.recordMarketSnapshot(marketSnapshot);
+  const thesisLink = store.getLatestMarketThesisLink({ marketKey });
+  if (!thesisLink?.thesisKey) {
+    return {
+      marketKey,
+      warnings: []
+    };
+  }
+
+  const summary = store.getPortfolioRiskSummary({ limit: 500 });
+  const marketExposure = summary.marketExposures.find((entry) => entry.marketKey === marketKey);
+  const thesisExposure = summary.thesisExposures.find((entry) => entry.thesisKey === thesisLink.thesisKey);
+  const projectedThesisExposureUsd = Number(
+    (((thesisExposure?.totalExposureUsd ?? 0) + incrementalNotionalUsd)).toFixed(4)
+  );
+  const projectedThesisMarketCount = (thesisExposure?.marketCount ?? 0) + ((marketExposure?.totalExposureUsd ?? 0) > 0 ? 0 : 1);
+  return {
+    marketKey,
+    thesisKey: thesisLink.thesisKey,
+    thesisExposureUsd: projectedThesisExposureUsd,
+    thesisMarketCount: projectedThesisMarketCount,
+    warnings: []
+  };
 }
 
 export function applyOrderbookSummary(
@@ -567,6 +690,351 @@ server.registerTool(
 );
 
 server.registerTool(
+  "get_state_summary",
+  {
+    description: toolDescription("get_state_summary"),
+    inputSchema: {
+      limit: z.number().int().min(1).max(100).default(10)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const summary = currentStateStore(config).getStateSummary(input.limit);
+    return textResult(summary as unknown as Record<string, unknown>);
+  }
+);
+
+server.registerTool(
+  "get_market_state",
+  {
+    description: toolDescription("get_market_state"),
+    inputSchema: {
+      identifier_type: z.enum(["slug", "condition_id", "token_id", "market_id"]),
+      identifier: z.string().min(1),
+      limit: z.number().int().min(1).max(100).default(20)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const persisted = await resolveAndPersistMarket(config, input.identifier_type, input.identifier);
+    const state = persisted.stateStore.getMarketState({
+      marketKey: persisted.marketKey,
+      limit: input.limit
+    });
+    return textResult({
+      marketKey: persisted.marketKey,
+      stateDbPath: config.stateDbPath,
+      snapshot: persisted.snapshot,
+      state
+    });
+  }
+);
+
+server.registerTool(
+  "get_portfolio_risk_summary",
+  {
+    description: toolDescription("get_portfolio_risk_summary"),
+    inputSchema: {
+      limit: z.number().int().min(1).max(200).default(50)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const summary = store.getPortfolioRiskSummary({ limit: input.limit });
+    return textResult({
+      stateDbPath: config.stateDbPath,
+      summary
+    });
+  }
+);
+
+server.registerTool(
+  "get_strategy_candidates",
+  {
+    description: toolDescription("get_strategy_candidates"),
+    inputSchema: {
+      limit: z.number().int().min(1).max(100).default(25),
+      interest_tiers: z.array(z.enum(["A", "B", "C", "AVOID"]))
+        .max(4)
+        .optional(),
+      include_waiting: z.boolean().default(false),
+      include_blocked: z.boolean().default(false)
+    }
+  },
+  async (input) => {
+    const { config, limits } = await currentLimits();
+    const { policies } = await currentStrategyPolicies(config);
+    const store = currentStateStore(config);
+    const candidates = listStrategyCandidates(store, policies, limits, {
+      limit: input.limit,
+      interestTiers: input.interest_tiers,
+      includeWaiting: input.include_waiting,
+      includeBlocked: input.include_blocked
+    });
+    return textResult({
+      stateDbPath: config.stateDbPath,
+      count: candidates.length,
+      candidates
+    });
+  }
+);
+
+server.registerTool(
+  "get_execution_queue",
+  {
+    description: toolDescription("get_execution_queue"),
+    inputSchema: {
+      limit: z.number().int().min(1).max(100).default(25),
+      include_waiting: z.boolean().default(false)
+    }
+  },
+  async (input) => {
+    const { config, limits } = await currentLimits();
+    const { policies } = await currentStrategyPolicies(config);
+    const store = currentStateStore(config);
+    const queue = buildExecutionQueue(store, policies, limits, {
+      limit: input.limit,
+      includeWaiting: input.include_waiting
+    });
+    return textResult({
+      stateDbPath: config.stateDbPath,
+      count: queue.length,
+      queue
+    });
+  }
+);
+
+server.registerTool(
+  "record_development",
+  {
+    description: toolDescription("record_development"),
+    inputSchema: {
+      identifier_type: z.enum(["slug", "condition_id", "token_id", "market_id"]),
+      identifier: z.string().min(1),
+      title: z.string().min(1).max(300),
+      summary: z.string().min(1).max(4000),
+      source: z.string().min(1).max(200),
+      url: z.string().url().optional(),
+      impact: z.enum(["bullish", "bearish", "neutral", "unclear"]).default("unclear"),
+      importance: z.number().int().min(0).max(100).default(50),
+      event_time: isoDateTimeSchema.optional(),
+      discovered_at: isoDateTimeSchema.optional(),
+      tags: z.array(z.string()).max(20).optional(),
+      notes: z.string().max(2000).optional(),
+      payload: z.record(z.string(), z.unknown()).optional()
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const persisted = await resolveAndPersistMarket(config, input.identifier_type, input.identifier);
+    const developmentId = persisted.stateStore.recordDevelopment({
+      marketKey: persisted.marketKey,
+      title: input.title,
+      summary: input.summary,
+      source: input.source,
+      url: input.url,
+      impact: input.impact,
+      importance: input.importance,
+      eventTime: input.event_time,
+      discoveredAt: input.discovered_at,
+      tags: input.tags,
+      notes: input.notes,
+      payload: input.payload
+    });
+    return textResult({
+      developmentId,
+      marketKey: persisted.marketKey,
+      stateDbPath: config.stateDbPath,
+      snapshot: persisted.snapshot
+    }, `Recorded development ${developmentId} for ${persisted.marketKey}.`);
+  }
+);
+
+const evidenceItemSchema = z.object({
+  source: z.string().min(1).max(200),
+  title: z.string().min(1).max(300),
+  url: z.string().url().optional(),
+  summary: z.string().min(1).max(4000),
+  stance: z.string().min(1).max(80),
+  confidence: z.string().min(1).max(40)
+});
+
+server.registerTool(
+  "record_thesis_link",
+  {
+    description: toolDescription("record_thesis_link"),
+    inputSchema: {
+      identifier_type: z.enum(["slug", "condition_id", "token_id", "market_id"]),
+      identifier: z.string().min(1),
+      thesis_key: z.string().min(1).max(200),
+      thesis_title: z.string().min(1).max(300).optional(),
+      confidence: z.number().min(0).max(100).optional(),
+      is_primary: z.boolean().default(true),
+      created_at: isoDateTimeSchema.optional(),
+      metadata: z.record(z.string(), z.unknown()).optional()
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const persisted = await resolveAndPersistMarket(config, input.identifier_type, input.identifier);
+    const thesisLinkId = persisted.stateStore.recordThesisLink({
+      marketKey: persisted.marketKey,
+      marketId: persisted.snapshot.marketId,
+      conditionId: persisted.snapshot.conditionId,
+      slug: persisted.snapshot.slug,
+      title: persisted.snapshot.title,
+      thesisKey: input.thesis_key,
+      thesisTitle: input.thesis_title,
+      confidence: input.confidence,
+      isPrimary: input.is_primary,
+      createdAt: input.created_at,
+      metadata: input.metadata,
+      linkSource: "manual"
+    });
+    return textResult({
+      thesisLinkId,
+      marketKey: persisted.marketKey,
+      stateDbPath: config.stateDbPath,
+      snapshot: persisted.snapshot,
+      thesisKey: input.thesis_key
+    }, `Recorded thesis link ${thesisLinkId} for ${persisted.marketKey}.`);
+  }
+);
+
+server.registerTool(
+  "record_research_synthesis",
+  {
+    description: toolDescription("record_research_synthesis"),
+    inputSchema: {
+      identifier_type: z.enum(["slug", "condition_id", "token_id", "market_id"]),
+      identifier: z.string().min(1),
+      title: z.string().min(1).max(300),
+      question: z.string().min(1).max(1000),
+      thesis: z.string().min(1).max(8000),
+      supports_yes: z.array(evidenceItemSchema).max(50).optional(),
+      supports_no: z.array(evidenceItemSchema).max(50).optional(),
+      open_questions: z.array(z.string().min(1).max(500)).max(50).optional(),
+      fair_value_low: z.number().optional(),
+      fair_value_base: z.number().optional(),
+      fair_value_high: z.number().optional(),
+      providers: z.array(z.string().min(1).max(120)).max(20).optional(),
+      notes: z.string().max(4000).optional(),
+      skill_version: z.string().max(120).optional(),
+      policy_version: z.string().max(120).optional(),
+      model_id: z.string().max(120).optional(),
+      prompt_hash: z.string().max(256).optional(),
+      automation_name: z.string().max(200).optional(),
+      thesis_key: z.string().min(1).max(200).optional(),
+      thesis_title: z.string().min(1).max(300).optional(),
+      thesis_confidence: z.number().min(0).max(100).optional(),
+      created_at: isoDateTimeSchema.optional(),
+      completed_at: isoDateTimeSchema.optional(),
+      synthesis: z.record(z.string(), z.unknown()).optional()
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const persisted = await resolveAndPersistMarket(config, input.identifier_type, input.identifier);
+    const runId = persisted.stateStore.recordResearchRun({
+      marketKey: persisted.marketKey,
+      title: input.title,
+      question: input.question,
+      thesis: input.thesis,
+      supportsYes: input.supports_yes,
+      supportsNo: input.supports_no,
+      openQuestions: input.open_questions,
+      fairValueLow: input.fair_value_low,
+      fairValueBase: input.fair_value_base,
+      fairValueHigh: input.fair_value_high,
+      providers: input.providers,
+      notes: input.notes,
+      skillVersion: input.skill_version,
+      policyVersion: input.policy_version,
+      modelId: input.model_id,
+      promptHash: input.prompt_hash,
+      automationName: input.automation_name,
+      thesisKey: input.thesis_key,
+      thesisTitle: input.thesis_title,
+      thesisConfidence: input.thesis_confidence,
+      createdAt: input.created_at,
+      completedAt: input.completed_at,
+      synthesis: input.synthesis
+    });
+    return textResult({
+      runId,
+      marketKey: persisted.marketKey,
+      stateDbPath: config.stateDbPath,
+      snapshot: persisted.snapshot
+    }, `Recorded research run ${runId} for ${persisted.marketKey}.`);
+  }
+);
+
+server.registerTool(
+  "record_classification",
+  {
+    description: toolDescription("record_classification"),
+    inputSchema: {
+      identifier_type: z.enum(["slug", "condition_id", "token_id", "market_id"]),
+      identifier: z.string().min(1),
+      structural_type: z.string().max(120).optional(),
+      category: z.string().max(120).optional(),
+      horizon_bucket: z.string().max(80).optional(),
+      pricing_status: z.string().max(80).optional(),
+      modelability_score: z.number().min(0).max(100).optional(),
+      tradability_score: z.number().min(0).max(100).optional(),
+      resolution_ambiguity_score: z.number().min(0).max(100).optional(),
+      attention_gap_score: z.number().min(0).max(100).optional(),
+      cross_market_consistency_score: z.number().min(0).max(100).optional(),
+      research_priority_score: z.number().min(0).max(100).optional(),
+      trade_opportunity_score: z.number().min(0).max(100).optional(),
+      confidence_score: z.number().min(0).max(100).optional(),
+      interest_tier: z.string().max(40).optional(),
+      reason_codes: z.array(z.string().min(1).max(120)).max(50).optional(),
+      disqualifiers: z.array(z.string().min(1).max(120)).max(50).optional(),
+      thesis_key: z.string().min(1).max(200).optional(),
+      thesis_title: z.string().min(1).max(300).optional(),
+      thesis_confidence: z.number().min(0).max(100).optional(),
+      decision: z.record(z.string(), z.unknown()),
+      created_at: isoDateTimeSchema.optional()
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const persisted = await resolveAndPersistMarket(config, input.identifier_type, input.identifier);
+    const classificationId = persisted.stateStore.recordClassification({
+      marketKey: persisted.marketKey,
+      structuralType: input.structural_type,
+      category: input.category,
+      horizonBucket: input.horizon_bucket,
+      pricingStatus: input.pricing_status,
+      modelabilityScore: input.modelability_score,
+      tradabilityScore: input.tradability_score,
+      resolutionAmbiguityScore: input.resolution_ambiguity_score,
+      attentionGapScore: input.attention_gap_score,
+      crossMarketConsistencyScore: input.cross_market_consistency_score,
+      researchPriorityScore: input.research_priority_score,
+      tradeOpportunityScore: input.trade_opportunity_score,
+      confidenceScore: input.confidence_score,
+      interestTier: input.interest_tier,
+      reasonCodes: input.reason_codes,
+      disqualifiers: input.disqualifiers,
+      thesisKey: input.thesis_key,
+      thesisTitle: input.thesis_title,
+      thesisConfidence: input.thesis_confidence,
+      decision: input.decision,
+      createdAt: input.created_at
+    });
+    return textResult({
+      classificationId,
+      marketKey: persisted.marketKey,
+      stateDbPath: config.stateDbPath,
+      snapshot: persisted.snapshot
+    }, `Recorded classification ${classificationId} for ${persisted.marketKey}.`);
+  }
+);
+
+server.registerTool(
   "preview_limit_order",
   {
     description: toolDescription("preview_limit_order"),
@@ -625,6 +1093,8 @@ server.registerTool(
 
     const exposure = await exposureContext(config, liveMarketSnapshot, orderNotionalUsd);
     warnings.push(...exposure.warnings);
+    const thesisExposure = thesisExposureContext(config, liveMarketSnapshot, orderNotionalUsd);
+    warnings.push(...thesisExposure.warnings);
 
     const openOrders = await openOrdersContext(config, undefined, liveMarketSnapshot.conditionId);
     warnings.push(...openOrders.warnings);
@@ -638,6 +1108,8 @@ server.registerTool(
       tags: liveMarketSnapshot.tags,
       orderNotionalUsd,
       marketExposureUsd: exposure.marketExposureUsd,
+      thesisExposureUsd: thesisExposure.thesisExposureUsd,
+      thesisMarketCount: thesisExposure.thesisMarketCount,
       grossExposureUsd: exposure.grossExposureUsd,
       openOrderCount: openOrders.allOpenOrders.length,
       resolvesWithinHours: hoursUntil(liveMarketSnapshot.endDate),
@@ -770,6 +1242,8 @@ server.registerTool(
 
     const exposure = await exposureContext(config, liveMarketSnapshot, incrementalNotionalUsd);
     warnings.push(...exposure.warnings);
+    const thesisExposure = thesisExposureContext(config, liveMarketSnapshot, incrementalNotionalUsd);
+    warnings.push(...thesisExposure.warnings);
 
     const openOrders = await openOrdersContext(config, undefined, liveMarketSnapshot.conditionId);
     warnings.push(...openOrders.warnings);
@@ -789,6 +1263,8 @@ server.registerTool(
       tags: liveMarketSnapshot.tags,
       orderNotionalUsd: incrementalNotionalUsd,
       marketExposureUsd: exposure.marketExposureUsd,
+      thesisExposureUsd: thesisExposure.thesisExposureUsd,
+      thesisMarketCount: thesisExposure.thesisMarketCount,
       grossExposureUsd: exposure.grossExposureUsd,
       openOrderCount: openOrders.allOpenOrders.length,
       resolvesWithinHours: hoursUntil(liveMarketSnapshot.endDate),
@@ -883,6 +1359,32 @@ server.registerTool(
     }
 
     const result = await invokePythonHelper<Record<string, unknown>>(config, "submit_preview", preview.submissionPayload);
+    try {
+      const store = currentStateStore(config);
+      const marketSnapshot = preview.marketSnapshot;
+      const marketKey = store.resolveMarketKey({
+        conditionId: marketSnapshot?.conditionId,
+        marketId: marketSnapshot?.marketId,
+        slug: marketSnapshot?.slug,
+        title: marketSnapshot?.title
+      });
+      store.markPreviewSubmitted(preview.previewId);
+      const orderRecord = orderRecordFromSubmitResult(preview, result);
+      store.recordOrderSubmission({
+        previewId: preview.previewId,
+        marketKey,
+        orderId: orderRecord.orderId,
+        side: orderRecord.side,
+        status: orderRecord.status,
+        orderKind: orderRecord.orderKind,
+        price: orderRecord.price,
+        size: orderRecord.size,
+        notionalUsd: orderRecord.notionalUsd,
+        payload: orderRecord.payload
+      });
+    } catch {
+      // submitting the live order should succeed even if local state persistence fails
+    }
     deletePreview(preview.previewId);
     return textResult({ preview, result, note: input.note });
   }

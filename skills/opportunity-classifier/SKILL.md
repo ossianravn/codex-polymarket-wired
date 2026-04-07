@@ -64,7 +64,13 @@ Do **not** use this skill to place trades.
    - `disqualifiers`
    - next best handoff skill
 
+7. Persist the result when the state tools are available.
+   - Call `record_classification` with the final normalized scores and decision payload.
+   - For names that already have history, use `get_market_state` first so repeated work builds on the prior record rather than starting from zero.
+
 ## hard rules
+
+- For tier `A` or `B` names with rule or structure uncertainty, consider spawning narrow read-only subagents such as `rules_auditor`, `microstructure_analyst`, or `related_market_mapper` before finalizing the classification.
 
 - Keep canonical metadata separate from derived judgments.
 - Do not use `isUnderPriced` or `isOverPriced` unless a fair probability exists. Until then, set `pricingStatus` to `unmodeled`.

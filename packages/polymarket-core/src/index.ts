@@ -4,6 +4,7 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import dotenv from "dotenv";
+import { openStateStore, type StoredAlertRecord, type StoredPreviewRecord } from "../../state-store/src/index.js";
 
 export type Side = "BUY" | "SELL";
 export type RestingOrderType = "GTC" | "GTD";
@@ -108,6 +109,7 @@ export interface RuntimeConfig {
   pythonBin: string;
   pythonHelperPath: string;
   alertCachePath: string;
+  stateDbPath: string;
 }
 
 const previewStore = new Map<string, PreviewRecord>();
@@ -160,6 +162,10 @@ export function loadRuntimeConfig(cwd = process.cwd()): RuntimeConfig {
     alertCachePath: absoluteFromCwd(
       cwd,
       process.env.POLYMARKET_ALERT_CACHE_PATH || ".cache/polymarket-alerts.json"
+    ),
+    stateDbPath: absoluteFromCwd(
+      cwd,
+      process.env.POLYMARKET_STATE_DB_PATH || "state/polymarket.sqlite"
     )
   };
 }
@@ -388,8 +394,58 @@ function chooseYesNoTokenIds(tokens: Array<{ outcome?: string; tokenId?: string;
   return result;
 }
 
+function previewRuntimeConfig(): RuntimeConfig {
+  return loadRuntimeConfig();
+}
+
+function stateStoreForConfig(config: RuntimeConfig) {
+  return openStateStore(config.stateDbPath);
+}
+
+function asStoredPreviewRecord(record: PreviewRecord): StoredPreviewRecord {
+  return {
+    previewId: record.previewId,
+    createdAt: record.createdAt,
+    orderKind: record.orderKind,
+    normalizedParams: record.normalizedParams,
+    warnings: record.warnings,
+    canSubmit: record.canSubmit,
+    policyHash: record.policyHash,
+    submissionPayload: record.submissionPayload,
+    marketSnapshot: record.marketSnapshot
+  } satisfies StoredPreviewRecord;
+}
+
+function fromStoredPreviewRecord(record: StoredPreviewRecord): PreviewRecord {
+  return {
+    previewId: record.previewId,
+    createdAt: record.createdAt,
+    orderKind: record.orderKind,
+    normalizedParams: record.normalizedParams,
+    warnings: record.warnings,
+    canSubmit: record.canSubmit,
+    policyHash: record.policyHash,
+    submissionPayload: record.submissionPayload,
+    marketSnapshot: record.marketSnapshot as MarketSnapshot | undefined
+  } satisfies PreviewRecord;
+}
+
 export function getPreview(previewId: string): PreviewRecord | undefined {
-  return previewStore.get(previewId);
+  const cached = previewStore.get(previewId);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const stored = stateStoreForConfig(previewRuntimeConfig()).getPreview(previewId);
+    if (!stored) {
+      return undefined;
+    }
+    const preview = fromStoredPreviewRecord(stored);
+    previewStore.set(preview.previewId, preview);
+    return preview;
+  } catch {
+    return undefined;
+  }
 }
 
 export function storePreview(record: Omit<PreviewRecord, "previewId" | "createdAt">): PreviewRecord {
@@ -399,11 +455,21 @@ export function storePreview(record: Omit<PreviewRecord, "previewId" | "createdA
     createdAt: new Date().toISOString()
   } satisfies PreviewRecord;
   previewStore.set(created.previewId, created);
+  try {
+    stateStoreForConfig(previewRuntimeConfig()).storePreview(asStoredPreviewRecord(created));
+  } catch {
+    // keep in-memory fallback even if SQLite state is unavailable
+  }
   return created;
 }
 
 export function deletePreview(previewId: string): void {
   previewStore.delete(previewId);
+  try {
+    stateStoreForConfig(previewRuntimeConfig()).deletePreview(previewId);
+  } catch {
+    // ignore state-store delete failures in the in-memory fallback path
+  }
 }
 
 export async function invokePythonHelper<T>(
@@ -851,6 +917,11 @@ export async function resolveMarketByIdentifier(
   if (!options?.includeRelatedMarkets) {
     snapshot.relatedMarkets = [];
   }
+  try {
+    stateStoreForConfig(config).recordMarketSnapshot(snapshot);
+  } catch {
+    // market state persistence is best-effort and should not break live reads
+  }
   return snapshot;
 }
 
@@ -1112,6 +1183,23 @@ export async function getLiveAlerts(
   args: { scope: "watchlist" | "portfolio" | "all"; since?: string; limit: number }
 ): Promise<Record<string, unknown>> {
   try {
+    const alerts = stateStoreForConfig(config).listAlerts(args).map((alert) => ({
+      ...alert,
+      metadata: alert.metadata ?? {}
+    } satisfies StoredAlertRecord));
+    if (alerts.length > 0) {
+      return {
+        cachePath: config.alertCachePath,
+        stateDbPath: config.stateDbPath,
+        count: alerts.length,
+        alerts
+      };
+    }
+  } catch {
+    // fall back to the JSON cache when the SQLite state store is unavailable
+  }
+
+  try {
     const raw = JSON.parse(await readFile(config.alertCachePath, "utf8")) as
       | Record<string, unknown>
       | unknown[];
@@ -1138,12 +1226,15 @@ export async function getLiveAlerts(
 
     return {
       cachePath: config.alertCachePath,
+      stateDbPath: config.stateDbPath,
       count: alerts.length,
-      alerts
+      alerts,
+      note: alerts.length > 0 ? "Returned alerts from the legacy JSON cache." : undefined
     };
   } catch {
     return {
       cachePath: config.alertCachePath,
+      stateDbPath: config.stateDbPath,
       count: 0,
       alerts: [],
       note: "No alert cache found yet. Start the watcher daemon or write alerts to the configured cache file."

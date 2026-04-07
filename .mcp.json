@@ -16,7 +16,8 @@
         "POLYMARKET_AUTO_DERIVE_API_CREDS": "true",
         "POLYMARKET_PYTHON_BIN": "python3",
         "POLYMARKET_PY_HELPER_PATH": "./servers/polymarket-mcp/helpers/trading_helper.py",
-        "POLYMARKET_ALERT_CACHE_PATH": "./.cache/polymarket-alerts.json"
+        "POLYMARKET_ALERT_CACHE_PATH": "./.cache/polymarket-alerts.json",
+        "POLYMARKET_STATE_DB_PATH": "./state/polymarket.sqlite"
       },
       "env_vars": [
         "POLYMARKET_PRIVATE_KEY",
@@ -35,7 +36,8 @@
         "BUILDER_REMOTE_SIGNER_TOKEN",
         "TAVILY_API_KEY",
         "PERPLEXITY_API_KEY",
-        "NEWSAPI_API_KEY"
+        "NEWSAPI_API_KEY",
+        "POLYMARKET_STATE_DB_PATH"
       ],
       "enabled_tools": [
         "search_markets",
@@ -52,7 +54,14 @@
         "submit_previewed_order",
         "cancel_orders",
         "cancel_market_orders",
-        "cancel_all_orders"
+        "cancel_all_orders",
+        "get_state_summary",
+        "get_market_state",
+        "get_strategy_candidates",
+        "get_execution_queue",
+        "record_development",
+        "record_research_synthesis",
+        "record_classification"
       ],
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90,

@@ -46,7 +46,8 @@ test("getOrderbook sorts bids descending and asks ascending before deriving top 
       autoDeriveApiCreds: true,
       pythonBin: "python",
       pythonHelperPath: "helper.py",
-      alertCachePath: ".cache/polymarket-alerts.json"
+      alertCachePath: ".cache/polymarket-alerts.json",
+      stateDbPath: "state/polymarket.sqlite"
     };
 
     const orderbook = await getOrderbook(config, "token-123", 3);
