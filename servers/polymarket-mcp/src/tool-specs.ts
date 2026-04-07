@@ -120,6 +120,20 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "get_bookmarked_markets",
+    access: "read",
+    description:
+      "Return the authenticated user's Polymarket website bookmarked markets using the rewards favorites feed.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        page_size: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+        next_cursor: { type: "string" }
+      }
+    }
+  },
+  {
     name: "get_open_orders",
     access: "read",
     description:
@@ -449,6 +463,27 @@ export const TOOLS: ToolSpec[] = [
         created_at: { type: "string", format: "date-time" }
       },
       required: ["identifier_type", "identifier", "decision"]
+    }
+  },
+  {
+    name: "sync_bookmarked_markets_to_watchlist",
+    access: "write",
+    description:
+      "Sync the authenticated user's bookmarked markets into configs/watchlists.yaml as a managed watchlist group.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        watchlist_name: { type: "string", minLength: 1, maxLength: 120, default: "bookmarks" },
+        replace_existing_group: { type: "boolean", default: true },
+        page_size: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+        next_cursor: { type: "string" },
+        move_threshold_pct_points: { type: "number", minimum: 0, default: 3 },
+        spread_threshold_cents: { type: "number", minimum: 0, default: 5 },
+        include_related_markets: { type: "boolean", default: true },
+        include_comments: { type: "boolean", default: true },
+        scope: { type: "string", enum: ["watchlist", "portfolio", "all"], default: "watchlist" }
+      }
     }
   },
   {

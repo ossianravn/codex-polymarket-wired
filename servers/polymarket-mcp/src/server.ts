@@ -1,10 +1,12 @@
 import path from "node:path";
 import process from "node:process";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
+import YAML from "yaml";
 
 import {
   deletePreview,
@@ -486,6 +488,183 @@ function previewSummaryText(previewId: string, warnings: PolicyWarning[], canSub
   return [`Preview ID: ${previewId}`, status, warningText].join("\n");
 }
 
+export interface BookmarkedMarketSummary {
+  title: string;
+  identifierType: "slug" | "condition_id" | "market_id";
+  identifier: string;
+  slug?: string;
+  conditionId?: string;
+  marketId?: string;
+  eventTitle?: string;
+  price?: number;
+  bestBid?: number;
+  bestAsk?: number;
+  volumeUsd?: number;
+  liquidityUsd?: number;
+  endDate?: string;
+  category?: string;
+}
+
+function bookmarkedMarketItems(raw: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+  }
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const record = raw as Record<string, unknown>;
+  const candidates = [record.data, record.markets, record.results];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+    }
+  }
+  return [];
+}
+
+export function normalizeBookmarkedMarketsResponse(raw: unknown): {
+  count: number;
+  markets: BookmarkedMarketSummary[];
+} {
+  const seen = new Set<string>();
+  const markets: BookmarkedMarketSummary[] = [];
+
+  for (const market of bookmarkedMarketItems(raw)) {
+    const slug = firstString(market.slug, market.market_slug);
+    const rawMarketId = firstString(market.id, market.marketId, market.market_id);
+    const rawConditionRef = firstString(market.conditionId, market.condition_id);
+    const fallbackRef = firstString(market.market);
+    const conditionId =
+      rawConditionRef ??
+      (fallbackRef && fallbackRef.startsWith("0x") ? fallbackRef : undefined);
+    const marketId =
+      rawMarketId ??
+      (fallbackRef && !fallbackRef.startsWith("0x") ? fallbackRef : undefined);
+    const identifierType = slug ? "slug" : conditionId ? "condition_id" : "market_id";
+    const identifier = slug ?? conditionId ?? marketId;
+    if (!identifier) {
+      continue;
+    }
+    const dedupeKey = `${identifierType}:${identifier}`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    markets.push({
+      title: firstString(market.question, market.title, market.market_question, identifier) ?? identifier,
+      identifierType,
+      identifier,
+      slug,
+      conditionId,
+      marketId,
+      eventTitle: firstString(market.eventTitle, market.event_title, market.eventName, market.event_name),
+      price: numericValue(market.lastTradePrice) ?? numericValue(market.price),
+      bestBid: numericValue(market.bestBid),
+      bestAsk: numericValue(market.bestAsk),
+      volumeUsd:
+        numericValue(market.volumeNum) ??
+        numericValue(market.volumeClob) ??
+        numericValue(market.volume),
+      liquidityUsd:
+        numericValue(market.liquidityNum) ??
+        numericValue(market.liquidityClob) ??
+        numericValue(market.liquidity),
+      endDate: firstString(market.endDateIso, market.endDate, market.end_date),
+      category: firstString(market.category)
+    });
+  }
+
+  return {
+    count: markets.length,
+    markets
+  };
+}
+
+interface BookmarkSyncOptions {
+  watchlist_name: string;
+  replace_existing_group: boolean;
+  move_threshold_pct_points: number;
+  spread_threshold_cents: number;
+  include_related_markets: boolean;
+  include_comments: boolean;
+  scope: "watchlist" | "portfolio" | "all";
+}
+
+export function mergeBookmarkedMarketsIntoWatchlistsYaml(
+  rawYaml: string,
+  bookmarks: { markets: BookmarkedMarketSummary[] },
+  options: BookmarkSyncOptions
+): {
+  yaml: string;
+  groupName: string;
+  marketCount: number;
+  replacedExistingGroup: boolean;
+} {
+  const parsed = (YAML.parse(rawYaml) ?? {}) as Record<string, unknown>;
+  const watchlists = Array.isArray(parsed.watchlists) ? [...parsed.watchlists] : [];
+  const syncedMarkets = bookmarks.markets.map((market) => ({
+    identifier_type: market.identifierType,
+    identifier: market.identifier,
+    move_threshold_pct_points: options.move_threshold_pct_points,
+    spread_threshold_cents: options.spread_threshold_cents,
+    include_related_markets: options.include_related_markets,
+    include_comments: options.include_comments,
+    scope: options.scope
+  }));
+
+  const nextGroup = {
+    name: options.watchlist_name,
+    description: "synced from Polymarket website bookmarks",
+    markets: syncedMarkets
+  };
+
+  const existingIndex = watchlists.findIndex((group) => {
+    const record = (group ?? {}) as Record<string, unknown>;
+    return String(record.name ?? "") === options.watchlist_name;
+  });
+
+  let replacedExistingGroup = false;
+  if (existingIndex >= 0) {
+    replacedExistingGroup = true;
+    if (options.replace_existing_group) {
+      watchlists[existingIndex] = nextGroup;
+    } else {
+      const existing = (watchlists[existingIndex] ?? {}) as Record<string, unknown>;
+      const existingMarkets = Array.isArray(existing.markets) ? existing.markets : [];
+      const merged = [...existingMarkets];
+      const seen = new Set(
+        merged.map((market) => {
+          const record = (market ?? {}) as Record<string, unknown>;
+          return `${String(record.identifier_type ?? record.identifierType ?? "slug")}:${String(record.identifier ?? "")}`;
+        })
+      );
+      for (const market of syncedMarkets) {
+        const key = `${market.identifier_type}:${market.identifier}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(market);
+        }
+      }
+      watchlists[existingIndex] = {
+        ...existing,
+        name: options.watchlist_name,
+        description: typeof existing.description === "string" ? existing.description : nextGroup.description,
+        markets: merged
+      };
+    }
+  } else {
+    watchlists.push(nextGroup);
+  }
+
+  parsed.watchlists = watchlists;
+  return {
+    yaml: YAML.stringify(parsed),
+    groupName: options.watchlist_name,
+    marketCount: syncedMarkets.length,
+    replacedExistingGroup
+  };
+}
+
 server.registerTool(
   "search_markets",
   {
@@ -597,6 +776,37 @@ server.registerTool(
       (trades as Record<string, unknown>).requestedStatusFilter = input.status;
     }
     return textResult(trades);
+  }
+);
+
+server.registerTool(
+  "get_bookmarked_markets",
+  {
+    description: toolDescription("get_bookmarked_markets"),
+    inputSchema: {
+      page_size: z.number().int().min(1).max(500).default(100),
+      next_cursor: z.string().optional()
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    if (!hasTradingCredentials(config)) {
+      throw new Error("Authenticated CLOB credentials are required to load bookmarked markets.");
+    }
+    const raw = await invokePythonHelper<Record<string, unknown> | Record<string, unknown>[]>(config, "bookmarked_markets", {
+      page_size: input.page_size,
+      next_cursor: input.next_cursor
+    });
+    const bookmarks = normalizeBookmarkedMarketsResponse(raw);
+    return textResult({
+      count: bookmarks.count,
+      page_size: input.page_size,
+      next_cursor: typeof (raw as Record<string, unknown>).next_cursor === "string"
+        ? (raw as Record<string, unknown>).next_cursor
+        : undefined,
+      markets: bookmarks.markets,
+      raw
+    });
   }
 );
 
@@ -1031,6 +1241,66 @@ server.registerTool(
       stateDbPath: config.stateDbPath,
       snapshot: persisted.snapshot
     }, `Recorded classification ${classificationId} for ${persisted.marketKey}.`);
+  }
+);
+
+server.registerTool(
+  "sync_bookmarked_markets_to_watchlist",
+  {
+    description: toolDescription("sync_bookmarked_markets_to_watchlist"),
+    inputSchema: {
+      watchlist_name: z.string().min(1).max(120).default("bookmarks"),
+      replace_existing_group: z.boolean().default(true),
+      page_size: z.number().int().min(1).max(500).default(100),
+      next_cursor: z.string().optional(),
+      move_threshold_pct_points: z.number().min(0).default(3),
+      spread_threshold_cents: z.number().min(0).default(5),
+      include_related_markets: z.boolean().default(true),
+      include_comments: z.boolean().default(true),
+      scope: z.enum(["watchlist", "portfolio", "all"]).default("watchlist")
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    if (!hasTradingCredentials(config)) {
+      throw new Error("Authenticated CLOB credentials are required to sync bookmarked markets.");
+    }
+    const raw = await invokePythonHelper<Record<string, unknown> | Record<string, unknown>[]>(config, "bookmarked_markets", {
+      page_size: input.page_size,
+      next_cursor: input.next_cursor
+    });
+    const bookmarks = normalizeBookmarkedMarketsResponse(raw);
+    if (bookmarks.count === 0) {
+      return textResult({
+        watchlistPath: path.resolve(config.cwd, "configs/watchlists.yaml"),
+        count: 0,
+        bookmarks: []
+      }, "No bookmarked markets were returned, so watchlists.yaml was left unchanged.");
+    }
+
+    const watchlistPath = path.resolve(config.cwd, "configs/watchlists.yaml");
+    const currentYaml = await readFile(watchlistPath, "utf8");
+    const merged = mergeBookmarkedMarketsIntoWatchlistsYaml(currentYaml, bookmarks, {
+      watchlist_name: input.watchlist_name,
+      replace_existing_group: input.replace_existing_group,
+      move_threshold_pct_points: input.move_threshold_pct_points,
+      spread_threshold_cents: input.spread_threshold_cents,
+      include_related_markets: input.include_related_markets,
+      include_comments: input.include_comments,
+      scope: input.scope
+    });
+    await writeFile(watchlistPath, merged.yaml, "utf8");
+
+    return textResult(
+      {
+        watchlistPath,
+        groupName: merged.groupName,
+        replacedExistingGroup: merged.replacedExistingGroup,
+        count: bookmarks.count,
+        bookmarks: bookmarks.markets
+      },
+      `Synced ${bookmarks.count} bookmarked markets into ${merged.groupName} at ${watchlistPath}.`
+    );
   }
 );
 

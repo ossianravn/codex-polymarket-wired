@@ -1,9 +1,10 @@
 {
   "mcpServers": {
     "polymarket": {
-      "command": "npx",
+      "type": "stdio",
+      "command": "node",
       "args": [
-        "tsx",
+        "./node_modules/tsx/dist/cli.mjs",
         "./servers/polymarket-mcp/src/server.ts"
       ],
       "cwd": ".",
@@ -45,6 +46,7 @@
         "get_orderbook",
         "get_price_history",
         "get_recent_trades",
+        "get_bookmarked_markets",
         "get_open_orders",
         "get_positions",
         "get_rewards_status",
@@ -63,7 +65,8 @@
         "record_development",
         "record_research_synthesis",
         "record_classification",
-        "record_thesis_link"
+        "record_thesis_link",
+        "sync_bookmarked_markets_to_watchlist"
       ],
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90,

@@ -5,6 +5,8 @@ import type { MarketSnapshot } from "../packages/polymarket-core/src/index.js";
 import {
   applyOrderbookSummary,
   isoDateTimeSchema,
+  mergeBookmarkedMarketsIntoWatchlistsYaml,
+  normalizeBookmarkedMarketsResponse,
   normalizeAllowanceSnapshot,
   normalizeAtomicAmount
 } from "../servers/polymarket-mcp/src/server.js";
@@ -65,4 +67,79 @@ test("applyOrderbookSummary overwrites stale snapshot book data with live orderb
   assert.equal(merged.spreadCents, 7);
   assert.equal(merged.minimumTickSize, 0.01);
   assert.equal(merged.minimumOrderSize, 5);
+});
+
+test("normalizeBookmarkedMarketsResponse prefers slug identifiers and dedupes repeated entries", () => {
+  const normalized = normalizeBookmarkedMarketsResponse({
+    data: [
+      {
+        question: "How many Tesla deliveries in Q2 2026?",
+        slug: "how-many-tesla-deliveries-in-q2-2026",
+        conditionId: "0xabc",
+        bestBid: "0.25",
+        bestAsk: "0.32"
+      },
+      {
+        title: "How many Tesla deliveries in Q2 2026?",
+        slug: "how-many-tesla-deliveries-in-q2-2026",
+        condition_id: "0xabc"
+      },
+      {
+        title: "Numeric fallback market",
+        market: "12345"
+      }
+    ]
+  });
+
+  assert.equal(normalized.count, 2);
+  assert.deepEqual(normalized.markets.map((market) => ({
+    identifierType: market.identifierType,
+    identifier: market.identifier
+  })), [
+    {
+      identifierType: "slug",
+      identifier: "how-many-tesla-deliveries-in-q2-2026"
+    },
+    {
+      identifierType: "market_id",
+      identifier: "12345"
+    }
+  ]);
+});
+
+test("mergeBookmarkedMarketsIntoWatchlistsYaml preserves existing groups and writes a managed bookmarks group", () => {
+  const merged = mergeBookmarkedMarketsIntoWatchlistsYaml(
+    [
+      "watchlists:",
+      "  - name: macro",
+      "    description: macro markets",
+      "    markets:",
+      "      - identifier_type: slug",
+      "        identifier: fed-market"
+    ].join("\n"),
+    {
+      markets: [
+        {
+          title: "Tesla",
+          identifierType: "slug",
+          identifier: "how-many-tesla-deliveries-in-q2-2026"
+        }
+      ]
+    },
+    {
+      watchlist_name: "bookmarks",
+      replace_existing_group: true,
+      move_threshold_pct_points: 3,
+      spread_threshold_cents: 5,
+      include_related_markets: true,
+      include_comments: true,
+      scope: "watchlist"
+    }
+  );
+
+  assert.equal(merged.groupName, "bookmarks");
+  assert.equal(merged.marketCount, 1);
+  assert.match(merged.yaml, /name: macro/);
+  assert.match(merged.yaml, /name: bookmarks/);
+  assert.match(merged.yaml, /identifier: how-many-tesla-deliveries-in-q2-2026/);
 });

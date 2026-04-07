@@ -4,6 +4,7 @@ import os
 import sys
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import (
@@ -17,7 +18,10 @@ from py_clob_client.clob_types import (
     OrdersScoringParams,
     OrderType,
     PartialCreateOrderOptions,
+    RequestArgs,
 )
+from py_clob_client.headers.headers import create_level_2_headers
+from py_clob_client.http_helpers.helpers import get
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -103,6 +107,22 @@ def action_orders_scoring(client: ClobClient, payload: Dict[str, Any]) -> Any:
     return client.are_orders_scoring(OrdersScoringParams(orderIds=order_ids))
 
 
+def action_bookmarked_markets(client: ClobClient, payload: Dict[str, Any]) -> Any:
+    client.assert_level_2_auth()
+    request_path = "/rewards/user/markets"
+    headers = create_level_2_headers(client.signer, client.creds, RequestArgs(method="GET", request_path=request_path))
+    query = {
+        "favorite_markets": "true",
+        "page_size": int(payload.get("page_size") or 100),
+        "signature_type": int(os.getenv("POLYMARKET_SIGNATURE_TYPE", "0")),
+    }
+    next_cursor = payload.get("next_cursor")
+    if next_cursor:
+        query["next_cursor"] = str(next_cursor)
+    url = f"{client.host}{request_path}?{urlencode(query)}"
+    return get(url, headers=headers)
+
+
 def partial_options(payload: Dict[str, Any]) -> PartialCreateOrderOptions:
     return PartialCreateOrderOptions(
         tick_size=str(payload.get("tick_size")) if payload.get("tick_size") is not None else None,
@@ -178,6 +198,7 @@ ACTIONS = {
     "open_orders": action_open_orders,
     "balance_allowance": action_balance_allowance,
     "orders_scoring": action_orders_scoring,
+    "bookmarked_markets": action_bookmarked_markets,
     "submit_preview": action_submit_preview,
     "cancel_orders": action_cancel_orders,
     "cancel_market_orders": action_cancel_market_orders,

@@ -1,0 +1,20 @@
+{
+  "name": "local-personal",
+  "interface": {
+    "displayName": "Local Personal Plugins"
+  },
+  "plugins": [
+    {
+      "name": "codex-polymarket",
+      "source": {
+        "source": "local",
+        "path": "./.codex/plugins/codex-polymarket"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

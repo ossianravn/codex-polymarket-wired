@@ -3,12 +3,11 @@
   "version": "0.1.0",
   "description": "polymarket classification, research, and guarded trading workflows for codex. use when codex needs to classify and triage polymarket markets, analyze market structure or resolution risk, perform deep market research, review positions and open orders, draft trade strategies, or connect to a polymarket mcp server for live market data and manual execution.",
   "author": {
-    "name": "Your team",
-    "email": "team@example.com",
-    "url": "https://example.com"
+    "name": "Ossian Ravn",
+    "url": "https://github.com/ossianravn"
   },
-  "homepage": "https://example.com/plugins/codex-polymarket",
-  "repository": "https://github.com/your-org/codex-polymarket",
+  "homepage": "https://github.com/ossianravn/codex-polymarket-wired",
+  "repository": "https://github.com/ossianravn/codex-polymarket-wired",
   "license": "MIT",
   "keywords": [
     "polymarket",
@@ -25,15 +24,13 @@
     "displayName": "Polymarket",
     "shortDescription": "classify markets, analyze odds, and draft guarded trades",
     "longDescription": "classify and triage polymarket markets, analyze odds, monitor watchlists, review portfolio risk, draft execution plans, and connect to a guarded polymarket mcp server for market data and manual trading.",
-    "developerName": "Your team",
+    "developerName": "Ossian Ravn",
     "category": "Productivity",
     "capabilities": [
       "Read",
       "Write"
     ],
-    "websiteURL": "https://example.com",
-    "privacyPolicyURL": "https://example.com/privacy",
-    "termsOfServiceURL": "https://example.com/terms",
+    "websiteURL": "https://github.com/ossianravn/codex-polymarket-wired",
     "defaultPrompt": [
       "Use Polymarket to classify this market and tell me whether it deserves deeper research.",
       "Use Polymarket to classify today's watchlist markets and tell me which deserve deeper research.",

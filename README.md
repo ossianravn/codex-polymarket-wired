@@ -53,6 +53,7 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
 - inspect live orderbooks
 - fetch price history
 - inspect recent trade flow
+- inspect authenticated bookmarked markets
 - inspect authenticated open orders
 - inspect positions
 - inspect rewards or order scoring context
@@ -65,6 +66,7 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
 - record research syntheses and evidence
 - record opportunity classifications
 - record thesis links between related markets
+- sync website bookmarks into the local watchlist config
 - inspect state summaries and per-market state
 - compute portfolio and thesis-level exposure summaries
 - derive ranked strategy candidates and execution queues from persisted state
@@ -89,6 +91,7 @@ The bundled MCP server currently exposes:
 - `get_orderbook`
 - `get_price_history`
 - `get_recent_trades`
+- `get_bookmarked_markets`
 - `get_open_orders`
 - `get_positions`
 - `get_rewards_status`
@@ -105,6 +108,7 @@ The bundled MCP server currently exposes:
 - `record_research_synthesis`
 - `record_classification`
 - `record_thesis_link`
+- `sync_bookmarked_markets_to_watchlist`
 - `preview_limit_order`
 - `preview_marketable_order`
 - `submit_previewed_order`
@@ -113,6 +117,19 @@ The bundled MCP server currently exposes:
 - `cancel_all_orders`
 
 The schema source of truth is [`servers/polymarket-mcp/src/tool-specs.ts`](C:/CodexApp/poly-plugin/codex-polymarket-wired/servers/polymarket-mcp/src/tool-specs.ts).
+
+## Watchlists And Website Bookmarks
+
+The watcher daemon still reads local watchlists from [`configs/watchlists.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/watchlists.yaml). That file remains the source of truth for monitoring.
+
+There are now two ways to populate it:
+
+- edit [`configs/watchlists.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/watchlists.yaml) directly
+- call `sync_bookmarked_markets_to_watchlist` to pull the authenticated user's Polymarket website favorites into a managed watchlist group such as `bookmarks`
+
+The read-side companion tool is `get_bookmarked_markets`, which queries the official authenticated endpoint [`GET /rewards/user/markets`](https://docs.polymarket.com/api-reference/rewards/get-user-earnings-and-markets-configuration) with `favorite_markets=true`.
+
+Important detail: bookmark syncing is additive to the local watchlist system, not a replacement for it. If the authenticated account has zero favorited markets, the sync tool returns cleanly and leaves [`configs/watchlists.yaml`](C:/CodexApp/poly-plugin/codex-polymarket-wired/configs/watchlists.yaml) unchanged.
 
 ## Architecture In Plain English
 
