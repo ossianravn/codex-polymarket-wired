@@ -1,7 +1,7 @@
 {
   "name": "codex-polymarket",
   "version": "0.1.0",
-  "description": "polymarket research and guarded trading workflows for codex. use when codex needs to analyze polymarket markets, perform deep market research, review positions and open orders, draft trade strategies, create order tickets, or connect to a polymarket mcp server for live market data and manual execution.",
+  "description": "polymarket classification, research, and guarded trading workflows for codex. use when codex needs to classify and triage polymarket markets, analyze market structure or resolution risk, perform deep market research, review positions and open orders, draft trade strategies, or connect to a polymarket mcp server for live market data and manual execution.",
   "author": {
     "name": "Your team",
     "email": "team@example.com",
@@ -23,8 +23,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Polymarket",
-    "shortDescription": "analyze markets and draft guarded trades",
-    "longDescription": "analyze polymarket markets, monitor watchlists, review portfolio risk, draft execution plans, and connect to a guarded polymarket mcp server for market data and manual trading.",
+    "shortDescription": "classify markets, analyze odds, and draft guarded trades",
+    "longDescription": "classify and triage polymarket markets, analyze odds, monitor watchlists, review portfolio risk, draft execution plans, and connect to a guarded polymarket mcp server for market data and manual trading.",
     "developerName": "Your team",
     "category": "Productivity",
     "capabilities": [
@@ -35,6 +35,8 @@
     "privacyPolicyURL": "https://example.com/privacy",
     "termsOfServiceURL": "https://example.com/terms",
     "defaultPrompt": [
+      "Use Polymarket to classify this market and tell me whether it deserves deeper research.",
+      "Use Polymarket to classify today's watchlist markets and tell me which deserve deeper research.",
       "Use Polymarket to analyze this market and write a market memo.",
       "Use Polymarket to review my positions and open orders.",
       "Use Polymarket to draft an order ticket for a guarded limit order."

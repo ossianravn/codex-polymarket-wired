@@ -2,7 +2,7 @@
   "name": "codex-polymarket",
   "private": true,
   "version": "0.1.0",
-  "description": "skill-first codex plugin scaffold for polymarket research and guarded trading",
+  "description": "skill-first codex plugin scaffold for polymarket opportunity classification, research, and guarded trading",
   "type": "module",
   "workspaces": [
     "packages/*",

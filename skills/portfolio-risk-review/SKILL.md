@@ -1,6 +1,6 @@
 ---
 name: portfolio-risk-review
-description: review polymarket positions, open orders, and concentration risk. use when the user asks what they own, where they are overexposed, which orders are stale, how correlated their book is, or what should be reduced or canceled.
+description: review polymarket positions, open orders, and concentration risk. use when the user asks what they own, where they are overexposed, which orders are stale, how correlated their book is, or what should be reduced or canceled. when helpful, reuse the opportunity-classifier taxonomy to bucket exposure by structural type, horizon, and resolution risk.
 ---
 
 # portfolio risk review
@@ -16,6 +16,7 @@ Use live positions and open orders to surface the clearest risks first.
    - theme
    - correlated event
    - near-term catalyst
+   - classification taxonomy when available: category, structural type, horizon bucket, and resolution-risk bucket
 4. Highlight:
    - concentration
    - duplicated thesis exposure
@@ -50,3 +51,4 @@ Use live positions and open orders to surface the clearest risks first.
 
 - Do not cancel orders in this skill unless the user explicitly asks.
 - Keep recommendations concrete and tied to observed exposure.
+- Reuse `opportunity-classifier` taxonomy whenever it makes concentration or duplicated-thesis risk easier to see.

@@ -1,0 +1,51 @@
+version: 1
+
+default_target_notional_usdc: 50
+
+allowed_structural_types:
+  - single-binary
+  - multi-outcome-exclusive
+  - threshold/range
+  - multi-yes
+
+blocked_structural_types:
+  - live/sports
+
+blocked_tags:
+  - sports_live
+  - novelty_low_liquidity
+
+score_thresholds:
+  min_modelability_score: 65
+  min_tradability_score: 55
+  max_resolution_ambiguity_score: 35
+  min_research_priority_score: 65
+  min_trade_opportunity_score: 75
+  min_edge_after_fees_pct_points: 3.0
+
+hard_filters:
+  min_liquidity_usdc: 10000
+  max_spread_cents: 5
+  max_slippage_cents_at_target_size: 3
+  avoid_if_resolves_within_hours: 2
+  require_accepting_orders: true
+  require_fee_adjusted_edge: true
+
+category_preferences:
+  politics: 8
+  economics: 6
+  finance: 6
+  tech: 4
+  crypto: 2
+  sports: -20
+  culture: -5
+
+horizon_preferences:
+  short_with_catalyst_days_max: 30
+  long_without_catalyst_days_max: 120
+
+handoff_rules:
+  tier_a_or_b_without_fair_value: deep-market-research
+  tier_a_or_b_with_fair_value: strategy-draft
+  summary_only: market-memo
+  execution_requests: order-ticket

@@ -1,6 +1,6 @@
 # codex-polymarket
 
-A **skill-first Codex plugin prototype** for Polymarket research, analysis, guarded trade previews, and scheduled automation.
+A **skill-first Codex plugin prototype** for Polymarket watchlist triage, market classification, research, analysis, guarded trade previews, and scheduled automation.
 
 This repo now includes a working MCP server prototype rather than only a scaffold. Public reads are implemented in TypeScript with direct HTTP calls to Polymarket's public APIs. Authenticated trading is bridged through a small Python helper that uses Polymarket's official Python CLOB client.
 
@@ -8,12 +8,12 @@ This repo now includes a working MCP server prototype rather than only a scaffol
 
 - `.codex-plugin/plugin.json` — plugin manifest
 - `.mcp.json` — MCP server registration for the bundled Polymarket MCP server
-- `skills/` — reusable Codex skills for research, strategy, order tickets, risk review, and automations
+- `skills/` — reusable Codex skills for opportunity classification, research, strategy, order tickets, risk review, and automations
 - `servers/polymarket-mcp/` — working MCP server, tool schemas, and Python trading helper
 - `packages/polymarket-core/` — shared API wrappers, normalization, preview storage, and helper utilities
 - `packages/policy-engine/` — risk limit loading and trade-policy evaluation
 - `services/` — watcher/executor scaffolding for later always-on automation
-- `configs/` — watchlist, risk-limit, and strategy-policy templates
+- `configs/` — watchlist, classification, risk-limit, and strategy-policy templates
 - `examples/automations/` — prompt files to paste into the Codex app automation UI
 - `docs/` — architecture notes, MCP tool summary, automation guidance, and relevant Polymarket repos
 
@@ -51,10 +51,17 @@ This repo is intentionally **preview-first**.
 
 This keeps the default UX aligned with "think, show, then act" rather than one-shot trading.
 
+A good upstream skill stack is:
+
+```txt
+watchlist-scan -> opportunity-classifier -> market-memo / deep-market-research -> strategy-draft -> order-ticket
+```
+
 ## Architecture
 
 ### Skills
 Use Codex skills for:
+- opportunity classification and watchlist triage
 - market memos
 - deep market research
 - strategy drafts
@@ -64,6 +71,9 @@ Use Codex skills for:
 - resolution watch
 - maker rewards review
 
+Suggested stack:
+`opportunity-classifier -> market-memo / deep-market-research -> strategy-draft -> order-ticket`
+
 ### MCP server
 Use the MCP layer for:
 - live Polymarket reads
@@ -72,8 +82,15 @@ Use the MCP layer for:
 - cached watcher alerts
 
 ### Watcher / executor split
-Use scheduled Codex app automations for recurring research and triage.
+Use scheduled Codex app automations for recurring opportunity triage, research, and monitoring.
 Use the watcher/executor services later for anything truly real-time such as websocket ingestion, quote maintenance, or heartbeat-based safety loops.
+
+### Recommended skill flow
+Use the new upstream triage layer like this:
+- `opportunity-classifier` -> `market-memo` for quick summaries
+- `opportunity-classifier` -> `deep-market-research` for A/B names that need fair-value work
+- `strategy-draft` only after research or when a prior already exists
+- `order-ticket` only for guarded execution after strategy work
 
 ## Setup
 
@@ -123,6 +140,7 @@ POLYMARKET_ENABLE_TRADING=true
 Edit:
 - `configs/risk-limits.yaml`
 - `configs/watchlists.yaml`
+- `configs/classification-policies.yaml`
 - `configs/strategy-policies.yaml`
 
 The policy engine currently checks:
@@ -134,6 +152,13 @@ The policy engine currently checks:
 - max open-order count
 - markets nearing resolution
 - blocked tags
+
+`configs/classification-policies.yaml` is read by the `opportunity-classifier` skill and automation prompts. It is advisory at the skill layer and is not yet enforced by the TypeScript policy engine.
+
+The opportunity-classifier policy file adds:
+- allowed or blocked structural types
+- score thresholds for modelability, tradability, and ambiguity
+- handoff defaults for memo, research, strategy, or execution
 
 ### 5. Start the MCP server locally
 
@@ -174,6 +199,7 @@ This helper is intentionally thin and can be replaced later if you move to a pur
 The plugin is designed so **skills are the automation surface**.
 
 Use the examples in `examples/automations/` for:
+- opportunity triage
 - watchlist scans
 - catalyst drift checks
 - portfolio risk reviews
@@ -182,7 +208,9 @@ Use the examples in `examples/automations/` for:
 
 Recommended v1 stance:
 - keep app automations read-heavy
+- use `opportunity-classifier` upstream of `deep-market-research` and `strategy-draft`
 - use them for triage and research
+- prefer `watchlist-scan -> opportunity-classifier -> deep-market-research` for unattended workflows
 - keep `POLYMARKET_ENABLE_TRADING=false` for unattended runs
 - reserve real-time execution for a separate daemon with hard controls
 
@@ -201,12 +229,17 @@ Before using it live, add or harden:
 
 ## Useful files
 
+- `skills/opportunity-classifier/` — upstream classification, segmentation, and triage skill
+- `configs/classification-policies.yaml` — score thresholds, hard filters, and handoff defaults for the classifier
 - `servers/polymarket-mcp/src/server.ts` — MCP server implementation
 - `servers/polymarket-mcp/helpers/trading_helper.py` — Python trading bridge
 - `packages/polymarket-core/src/index.ts` — shared Polymarket helpers
 - `packages/policy-engine/src/index.ts` — risk and policy checks
 - `servers/polymarket-mcp/src/tool-specs.ts` — input schema summary
-- `examples/automations/` — app automation prompt templates
+- `examples/automations/` — app automation prompt templates including opportunity triage
+
+A good read-heavy automation chain is:
+`watchlist-scan -> opportunity-classifier -> deep-market-research` for A/B names only.
 
 ## Next improvements
 
@@ -216,3 +249,4 @@ Good next steps after this prototype:
 3. add structured audit logs for every preview, submit, and cancel
 4. add builder-mode remote signing support
 5. replace the Python bridge with a pure TypeScript trading path if desired
+6. add a batch metrics helper for opportunity classification once the taxonomy stabilizes

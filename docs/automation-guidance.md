@@ -4,6 +4,7 @@
 
 Good automation tasks:
 - watchlist scans
+- opportunity triage
 - catalyst drift checks
 - resolution watch
 - portfolio and open-order reviews
@@ -22,10 +23,12 @@ Avoid in the Codex app:
 - keep runs read-heavy
 - prefer worktrees for git repos
 - keep execution disabled for unattended runs in v1
+- prefer `watchlist-scan -> opportunity-classifier -> deep-market-research` for recurring discovery
 
 ## suggested cadences
 
 - watchlist scan: every 15 to 30 minutes
+- opportunity triage: every 30 to 60 minutes or immediately after each watchlist scan
 - catalyst drift: every 1 to 4 hours
 - portfolio risk review: every 2 to 6 hours
 - resolution watch: every 15 minutes for near-resolution markets

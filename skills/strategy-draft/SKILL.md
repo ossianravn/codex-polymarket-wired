@@ -1,6 +1,6 @@
 ---
 name: strategy-draft
-description: turn a polymarket thesis into a practical strategy draft. use when the user wants entry ideas, exit logic, invalidation, scenario planning, passive versus aggressive execution guidance, or a trade plan that still stops short of sending orders.
+description: turn a polymarket thesis into a practical strategy draft. use when the user wants entry ideas, exit logic, invalidation, scenario planning, passive versus aggressive execution guidance, or a trade plan that still stops short of sending orders. use opportunity-classifier or deep-market-research first if the market has not been screened or modeled yet.
 ---
 
 # strategy draft
@@ -9,7 +9,7 @@ Convert a thesis into a clear execution plan without placing trades.
 
 ## workflow
 
-1. Start from a market memo or deep research result.
+1. Start from a market memo, deep research result, or a clearly modeled classifier output.
 2. Confirm the live market state again before drafting entries.
 3. Prefer passive entries when spread and liquidity make that sensible.
 4. Draft:
@@ -54,4 +54,5 @@ Convert a thesis into a clear execution plan without placing trades.
 ## guardrails
 
 - Do not submit orders in this skill.
+- If there is no fair-value view or no tradability screen yet, hand off to `opportunity-classifier` or `deep-market-research` first.
 - If the user wants an executable ticket, hand off to `order-ticket`.

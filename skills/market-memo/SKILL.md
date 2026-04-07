@@ -1,6 +1,6 @@
 ---
 name: market-memo
-description: write a structured memo for a polymarket market or event. use when the user asks to analyze a single market, summarize current odds, liquidity, spread, recent flow, resolution mechanics, or prepare a trade brief before acting.
+description: write a structured memo for a polymarket market or event. use when the user asks to analyze a single market, summarize current odds, liquidity, spread, recent flow, resolution mechanics, or prepare a trade brief before acting. for broad candidate sets or ranking questions, use opportunity-classifier first.
 ---
 
 # market memo
@@ -58,5 +58,6 @@ Use this default structure:
 ## guardrails
 
 - Do not place trades in this skill.
+- If the user needs prioritization across multiple markets, hand off to `opportunity-classifier`.
 - If the user wants a fair-value estimate or strategy, hand off to `strategy-draft`.
 - If the user wants an executable plan, hand off to `order-ticket`.

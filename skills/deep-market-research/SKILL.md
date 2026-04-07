@@ -1,6 +1,6 @@
 ---
 name: deep-market-research
-description: perform deep research for a polymarket market, event, or thesis. use when the user wants fair-value work, evidence gathering, catalyst mapping, linked-market comparisons, or a detailed explanation of whether the market looks mispriced.
+description: perform deep research for a polymarket market, event, or thesis. use when the user wants fair-value work, evidence gathering, catalyst mapping, linked-market comparisons, or a detailed explanation of whether the market looks mispriced. for wide candidate sets or triage questions, use opportunity-classifier first.
 ---
 
 # deep market research
@@ -10,6 +10,8 @@ Blend Polymarket data with any available external research tools or connectors.
 ## workflow
 
 1. Resolve the target market.
+   - For one market, resolve it directly.
+   - For many candidates, run `opportunity-classifier` first and shortlist only the names that deserve a full fair-value pass.
 2. Pull a full market snapshot and recent price/trade context.
 3. Build an evidence map:
    - official or primary-source resolution evidence
@@ -60,4 +62,5 @@ Always distinguish:
 
 - Do not place trades here.
 - If no external research tools are available, say that clearly.
+- For broad scans or multi-market ranking, use `opportunity-classifier` first.
 - If the user wants sizing or entries, hand off to `strategy-draft`.

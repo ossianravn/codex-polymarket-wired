@@ -2,15 +2,15 @@
 
 ## product shape
 
-Use three lanes:
+Use four lanes:
 
 1. **interactive lane**
-   - user asks Codex to analyze a market
+   - user asks Codex to classify or analyze a market
    - skills call the MCP tools
-   - Codex returns memos, strategy drafts, and order previews
+   - Codex returns classifications, memos, strategy drafts, and order previews
 
 2. **scheduled lane**
-   - Codex app automations call `$watchlist-scan`, `$portfolio-risk-review`, `$resolution-watch`, and related skills
+   - Codex app automations call `$watchlist-scan`, `$opportunity-classifier`, `$portfolio-risk-review`, `$resolution-watch`, and related skills
    - the run posts findings into Triage
    - no live market-making or heartbeat loops here
 
@@ -19,10 +19,26 @@ Use three lanes:
    - executor daemon optionally maintains quotes, cancels stale orders, and manages heartbeat liveness
    - this lane is out-of-band from Codex app automations
 
+4. **execution lane**
+   - guarded previews and explicit submits happen only after the user or a downstream skill has already narrowed the candidate set
+   - keep preview-before-submit as the default posture
+
+## recommended skill stack
+
+```txt
+watchlist-scan -> opportunity-classifier -> market-memo / deep-market-research -> strategy-draft -> order-ticket
+```
+
+Use `opportunity-classifier` as the upstream triage layer whenever the user is deciding:
+- which markets are interesting enough to escalate
+- which structural types are allowed or blocked
+- which next skill should be used
+
 ## plugin responsibilities
 
 ### skills
 Handle:
+- opportunity classification and triage
 - market analysis
 - external evidence synthesis
 - strategy drafting
