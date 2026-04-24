@@ -23,6 +23,8 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
   The MCP server and the Python trading helper used for authenticated trading actions.
 - `packages/polymarket-core/`
   Shared Polymarket HTTP clients, normalization, preview handling, and runtime config loading.
+- `packages/market-universe/`
+  Full-universe ingestion, deterministic first-pass facets and scores, candidate profiles, and selective CLOB enrichment.
 - `packages/policy-engine/`
   Risk-limit and execution-policy checks, including thesis-level caps.
 - `packages/state-store/`
@@ -62,6 +64,8 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
 ### Stateful research and orchestration
 
 - persist market snapshots into SQLite
+- ingest and persist full-universe discovery runs
+- facet, filter, and shortlist the active market universe
 - record structured developments and catalysts
 - record research syntheses and evidence
 - record opportunity classifications
@@ -79,6 +83,24 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
 - submit only from a preview
 - persist submitted orders
 - cancel specific orders, market orders, or all orders
+
+## Full-universe bet discovery
+
+Use `$bet-discovery` or the MCP universe tools to ingest the full active Polymarket universe, compute deterministic facets and triage scores, and shortlist markets for deeper classification and research.
+
+Typical flow:
+
+1. `ingest_market_universe`
+2. `get_universe_facets`
+3. `list_market_universe`, `get_bet_candidates`, or `get_universe_event_clusters`
+4. `$opportunity-classifier`
+5. `$deep-market-research`
+6. `$strategy-draft`
+7. `$order-ticket`
+
+Universe discovery is read-only. It does not place or preview trades.
+
+`get_universe_event_clusters` is for many-participant setups such as elections, tournaments, Eurovision, awards, and other events with many related markets. Its `outsider-convexity` profile looks for clusters with multiple cheap, tradeable outsider markets that can re-rate sharply if a participant over-performs.
 
 ## MCP Tool Surface
 
@@ -101,6 +123,12 @@ The bundled MCP server currently exposes:
 - `get_portfolio_risk_summary`
 - `get_strategy_candidates`
 - `get_execution_queue`
+- `ingest_market_universe`
+- `list_market_universe`
+- `get_universe_facets`
+- `get_bet_candidates`
+- `get_universe_event_clusters`
+- `enrich_universe_markets`
 
 ### Write tools
 
@@ -109,6 +137,7 @@ The bundled MCP server currently exposes:
 - `record_classification`
 - `record_thesis_link`
 - `sync_bookmarked_markets_to_watchlist`
+- `promote_universe_markets_to_watchlist`
 - `preview_limit_order`
 - `preview_marketable_order`
 - `submit_previewed_order`
@@ -302,6 +331,8 @@ Fill:
 - `POLYMARKET_FUNDER` if needed for your account mode
 - `POLYMARKET_SIGNATURE_TYPE`
 - `POLYMARKET_AUTO_DERIVE_API_CREDS=true`
+
+L2 API credentials authenticate trading requests, but order placement still requires a signer/private key to sign the order payload. Keep the private key outside model-visible prompts and never log it.
 
 ### 6. Review policy files
 

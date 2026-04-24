@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -115,11 +116,64 @@ export interface RuntimeConfig {
 const previewStore = new Map<string, PreviewRecord>();
 let dotenvLoaded = false;
 
+function resolvePluginRoot(cwd: string): string {
+  let current = path.resolve(cwd);
+  while (true) {
+    if (existsSync(path.resolve(current, ".codex-plugin", "plugin.json"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return path.resolve(cwd);
+    }
+    current = parent;
+  }
+}
+
+function resolveInstalledPluginRootFromCache(cwd: string): string | undefined {
+  const resolvedCwd = path.resolve(cwd);
+  const match = resolvedCwd.match(
+    /^(?<codexHome>.+[\\\/]\.codex)[\\\/]plugins[\\\/]cache[\\\/][^\\\/]+[\\\/](?<pluginName>[^\\\/]+)[\\\/]local(?:[\\\/].*)?$/
+  );
+  if (!match?.groups?.codexHome || !match.groups.pluginName) {
+    return undefined;
+  }
+  return path.resolve(match.groups.codexHome, "plugins", match.groups.pluginName);
+}
+
+export function resolveRuntimeDotenvPath(cwd: string): string | undefined {
+  const pluginRoot = resolvePluginRoot(cwd);
+  const candidates: string[] = [];
+
+  let current = path.resolve(cwd);
+  while (true) {
+    candidates.push(path.resolve(current, ".env"));
+    if (current === pluginRoot) {
+      break;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  const installedPluginRoot = resolveInstalledPluginRootFromCache(pluginRoot);
+  if (installedPluginRoot) {
+    candidates.push(path.resolve(installedPluginRoot, ".env"));
+  }
+
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
 function ensureDotenv(cwd: string): void {
   if (dotenvLoaded) {
     return;
   }
-  dotenv.config({ path: path.resolve(cwd, ".env"), quiet: true });
+  const dotenvPath = resolveRuntimeDotenvPath(cwd);
+  if (dotenvPath) {
+    dotenv.config({ path: dotenvPath, quiet: true, override: true });
+  }
   dotenvLoaded = true;
 }
 
@@ -573,6 +627,8 @@ function mapSearchMarketResult(market: Record<string, unknown>): Record<string, 
     closed: Boolean(market.closed),
     archived: Boolean(market.archived),
     endDate: market.endDateIso ?? market.endDate,
+    createdAt: market.createdAt ?? market.created_at,
+    updatedAt: market.updatedAt ?? market.updated_at,
     tags,
     image: market.image,
     icon: market.icon
@@ -642,7 +698,11 @@ export async function searchMarkets(
       markets.sort((a, b) => Date.parse(String(a.endDate ?? "9999-12-31")) - Date.parse(String(b.endDate ?? "9999-12-31")));
       break;
     case "newest":
-      markets.sort((a, b) => Date.parse(String(b.createdAt ?? 0)) - Date.parse(String(a.createdAt ?? 0)));
+      markets.sort(
+        (a, b) =>
+          Date.parse(String(b.createdAt ?? b.updatedAt ?? b.endDate ?? 0)) -
+          Date.parse(String(a.createdAt ?? a.updatedAt ?? a.endDate ?? 0))
+      );
       break;
     default:
       break;

@@ -279,6 +279,209 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "ingest_market_universe",
+    access: "read",
+    description:
+      "Pull the active Polymarket market universe from Gamma keyset endpoints, compute deterministic facets and scores, selectively enrich top candidates with CLOB microstructure, and persist the run in SQLite. Read-only: does not place or preview trades.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        active_only: { type: "boolean", default: true },
+        include_closed: { type: "boolean", default: false },
+        source: { type: "string", enum: ["markets_keyset", "events_keyset", "both"], default: "markets_keyset" },
+        page_size: { type: "integer", minimum: 1, maximum: 1000, default: 1000 },
+        limit_pages: { type: "integer", minimum: 1, maximum: 1000 },
+        min_liquidity_usdc: { type: "number", minimum: 0 },
+        include_tags: { type: "boolean", default: true },
+        order: { type: "string", maxLength: 120, default: "volume_num,liquidity_num" },
+        ascending: { type: "boolean", default: false },
+        enrich_top_n: { type: "integer", minimum: 0, maximum: 1000, default: 250 },
+        enrichment_profile: {
+          type: "string",
+          enum: ["none", "microstructure", "microstructure_and_history"],
+          default: "microstructure"
+        }
+      }
+    }
+  },
+  {
+    name: "list_market_universe",
+    access: "read",
+    description:
+      "List markets from a persisted universe run using facets, thresholds, views, and sort modes. Use after ingest_market_universe for sortable bet discovery.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        run_id: { type: "string" },
+        view: {
+          type: "string",
+          enum: [
+            "best_research_candidates",
+            "clean_catalyst_bets",
+            "execution_ready",
+            "market_making_candidates",
+            "cross_market_dislocations",
+            "resolution_watch",
+            "low_attention_modelable",
+            "avoid_or_blocked"
+          ]
+        },
+        category_groups: { type: "array", items: { type: "string" }, maxItems: 10 },
+        structural_types: { type: "array", items: { type: "string" }, maxItems: 10 },
+        horizon_buckets: { type: "array", items: { type: "string" }, maxItems: 10 },
+        price_buckets: { type: "array", items: { type: "string" }, maxItems: 10 },
+        opportunity_modes: { type: "array", items: { type: "string" }, maxItems: 10 },
+        min_liquidity_usdc: { type: "number", minimum: 0 },
+        min_volume_24h_usdc: { type: "number", minimum: 0 },
+        max_spread_cents: { type: "number", minimum: 0 },
+        min_tradability_score: { type: "number", minimum: 0, maximum: 100 },
+        min_research_priority_score: { type: "number", minimum: 0, maximum: 100 },
+        max_resolution_ambiguity_score: { type: "number", minimum: 0, maximum: 100 },
+        include_tags: { type: "array", items: { type: "string" }, maxItems: 20 },
+        exclude_tags: { type: "array", items: { type: "string" }, maxItems: 20 },
+        search: { type: "string", maxLength: 200 },
+        sort: {
+          type: "string",
+          enum: [
+            "research_priority_desc",
+            "trade_opportunity_desc",
+            "maker_score_desc",
+            "liquidity_desc",
+            "volume_24h_desc",
+            "ending_soon",
+            "attention_gap_desc",
+            "spread_asc",
+            "risk_desc"
+          ],
+          default: "research_priority_desc"
+        },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+        offset: { type: "integer", minimum: 0, default: 0 }
+      }
+    }
+  },
+  {
+    name: "get_universe_facets",
+    access: "read",
+    description:
+      "Return counts and available facet values for the latest or specified market universe run.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        run_id: { type: "string" }
+      }
+    }
+  },
+  {
+    name: "get_universe_event_clusters",
+    access: "read",
+    description:
+      "Find multi-market event clusters in a persisted universe run, especially many-participant events with tradeable outsider/longshot markets that can re-rate sharply on outperformance.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        run_id: { type: "string" },
+        profile: {
+          type: "string",
+          enum: ["outsider-convexity", "large-event"],
+          default: "outsider-convexity"
+        },
+        category_groups: { type: "array", items: { type: "string" }, maxItems: 10 },
+        search: { type: "string", maxLength: 200 },
+        min_market_count: { type: "integer", minimum: 2, maximum: 500 },
+        min_outsider_count: { type: "integer", minimum: 0, maximum: 200 },
+        min_cluster_liquidity_usdc: { type: "number", minimum: 0 },
+        min_outsider_liquidity_usdc: { type: "number", minimum: 0 },
+        min_outsider_price: { type: "number", minimum: 0, maximum: 0.5 },
+        max_outsider_price: { type: "number", minimum: 0.01, maximum: 0.5 },
+        max_outsider_spread_cents: { type: "number", minimum: 0, maximum: 100 },
+        sort: {
+          type: "string",
+          enum: ["outsider_convexity_desc", "market_count_desc", "liquidity_desc"],
+          default: "outsider_convexity_desc"
+        },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+        markets_per_cluster: { type: "integer", minimum: 1, maximum: 50, default: 8 }
+      }
+    }
+  },
+  {
+    name: "get_bet_candidates",
+    access: "read",
+    description:
+      "Return preset bet candidate lists such as clean short-term markets, liquid politics, macro catalysts, market-making candidates, longshot research, resolution watch, or cross-market checks.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        profile: {
+          type: "string",
+          enum: [
+            "clean-short-term",
+            "liquid-politics",
+            "macro-catalyst",
+            "market-making",
+            "longshot-research",
+            "resolution-watch",
+            "cross-market"
+          ]
+        },
+        run_id: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+        ensure_fresh: { type: "boolean", default: false },
+        max_age_minutes: { type: "integer", minimum: 1, maximum: 10080, default: 1440 }
+      },
+      required: ["profile"]
+    }
+  },
+  {
+    name: "enrich_universe_markets",
+    access: "read",
+    description:
+      "Selectively refresh CLOB microstructure for specific persisted universe markets or the top N of a view. Read-only enrichment; does not place or preview trades.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        run_id: { type: "string" },
+        market_keys: { type: "array", items: { type: "string" }, maxItems: 100 },
+        view: { type: "string" },
+        top_n: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+        enrichment_profile: {
+          type: "string",
+          enum: ["microstructure", "microstructure_and_history"],
+          default: "microstructure"
+        }
+      }
+    }
+  },
+  {
+    name: "promote_universe_markets_to_watchlist",
+    access: "write",
+    description:
+      "Add selected universe markets to configs/watchlists.yaml as a managed watchlist group. Does not place or preview trades. Use only after explicit user instruction.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        run_id: { type: "string" },
+        market_keys: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 100 },
+        watchlist_name: { type: "string", minLength: 1, maxLength: 120 },
+        replace_existing_group: { type: "boolean", default: false },
+        move_threshold_pct_points: { type: "number", minimum: 0, default: 3 },
+        spread_threshold_cents: { type: "number", minimum: 0, default: 5 },
+        include_related_markets: { type: "boolean", default: true },
+        include_comments: { type: "boolean", default: true },
+        scope: { type: "string", enum: ["watchlist", "portfolio", "all"], default: "watchlist" }
+      },
+      required: ["market_keys", "watchlist_name"]
+    }
+  },
+  {
     name: "record_development",
     access: "write",
     description:

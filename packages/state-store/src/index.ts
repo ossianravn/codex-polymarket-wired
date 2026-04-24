@@ -187,6 +187,136 @@ export interface StoredAgentRunInput {
   output?: Record<string, unknown>;
 }
 
+export interface StoredUniverseRunInput {
+  runId?: string;
+  startedAt?: string;
+  completedAt?: string;
+  source: string;
+  activeOnly: boolean;
+  closedIncluded: boolean;
+  totalEvents?: number;
+  totalMarkets?: number;
+  enrichedMarkets?: number;
+  status: "running" | "completed" | "failed";
+  metadata?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface StoredUniverseMarketInput {
+  runId: string;
+  marketKey: string;
+  marketId?: string;
+  conditionId?: string;
+  questionId?: string;
+  eventId?: string;
+  eventSlug?: string;
+  eventTitle?: string;
+  seriesSlug?: string;
+  seriesTitle?: string;
+  slug?: string;
+  title: string;
+  description?: string;
+  resolutionSource?: string;
+  resolutionText?: string;
+  category?: string;
+  subcategory?: string;
+  tags?: string[];
+  outcomes?: string[];
+  outcomePrices?: number[];
+  clobTokenIds?: string[];
+  yesTokenId?: string;
+  noTokenId?: string;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  restricted?: boolean;
+  acceptingOrders?: boolean;
+  enableOrderBook?: boolean;
+  startDate?: string;
+  endDate?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  liquidityUsd?: number;
+  liquidityClobUsd?: number;
+  volumeUsd?: number;
+  volume24hUsd?: number;
+  volume7dUsd?: number;
+  volume30dUsd?: number;
+  impliedProb?: number;
+  lastTradePrice?: number;
+  bestBid?: number;
+  bestAsk?: number;
+  midpoint?: number;
+  spreadCents?: number;
+  orderPriceMinTickSize?: number;
+  orderMinSize?: number;
+  negRisk?: boolean;
+  depthUsdWithin2c?: number;
+  depthUsdWithin5c?: number;
+  slippageCentsAt50Usd?: number;
+  slippageCentsAt250Usd?: number;
+  structuralType?: string;
+  categoryGroup?: string;
+  horizonBucket?: string;
+  priceBucket?: string;
+  liquidityBucket?: string;
+  spreadBucket?: string;
+  opportunityMode?: string;
+  modelabilityScore?: number;
+  tradabilityScore?: number;
+  catalystScore?: number;
+  resolutionAmbiguityScore?: number;
+  attentionGapScore?: number;
+  crossMarketScore?: number;
+  researchPriorityScore?: number;
+  tradeOpportunityScore?: number;
+  makerScore?: number;
+  riskScore?: number;
+  reasonCodes?: string[];
+  disqualifiers?: string[];
+  rawJson: Record<string, unknown>;
+  capturedAt?: string;
+}
+
+export interface StoredUniverseListFilters {
+  runId?: string;
+  view?: string;
+  categoryGroups?: string[];
+  structuralTypes?: string[];
+  horizonBuckets?: string[];
+  priceBuckets?: string[];
+  opportunityModes?: string[];
+  minLiquidityUsdc?: number;
+  minVolume24hUsdc?: number;
+  maxSpreadCents?: number;
+  minTradabilityScore?: number;
+  minResearchPriorityScore?: number;
+  maxResolutionAmbiguityScore?: number;
+  excludeTags?: string[];
+  includeTags?: string[];
+  search?: string;
+  sort?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface StoredUniverseClusterFilters {
+  runId?: string;
+  profile?: "outsider-convexity" | "large-event";
+  categoryGroups?: string[];
+  search?: string;
+  minMarketCount?: number;
+  minOutsiderCount?: number;
+  minClusterLiquidityUsdc?: number;
+  minOutsiderLiquidityUsdc?: number;
+  minOutsiderPrice?: number;
+  maxOutsiderPrice?: number;
+  maxOutsiderSpreadCents?: number;
+  limit?: number;
+  marketsPerCluster?: number;
+  sort?: "outsider_convexity_desc" | "market_count_desc" | "liquidity_desc";
+}
+
 export interface StoredStateSummary {
   dbPath: string;
   generatedAt: string;
@@ -481,6 +611,276 @@ function orderRowToRecord(row: unknown): StoredOrderRecord {
   } satisfies StoredOrderRecord;
 }
 
+function universeRunRowToRecord(row: unknown): Record<string, unknown> {
+  const record = rowRecord(row);
+  return {
+    runId: record.run_id,
+    startedAt: record.started_at,
+    completedAt: record.completed_at,
+    source: record.source,
+    activeOnly: intToBool(record.active_only),
+    closedIncluded: intToBool(record.closed_included),
+    totalEvents: asNumber(record.total_events) ?? 0,
+    totalMarkets: asNumber(record.total_markets) ?? 0,
+    enrichedMarkets: asNumber(record.enriched_markets) ?? 0,
+    status: record.status,
+    metadata: parseJson<Record<string, unknown>>(record.metadata_json, {}),
+    error: typeof record.error === "string" ? record.error : undefined
+  };
+}
+
+function universeMarketRowToRecord(row: unknown): Record<string, unknown> {
+  const record = rowRecord(row);
+  return {
+    runId: record.run_id,
+    marketKey: record.market_key,
+    marketId: record.market_id,
+    conditionId: record.condition_id,
+    questionId: record.question_id,
+    eventId: record.event_id,
+    eventSlug: record.event_slug,
+    eventTitle: record.event_title,
+    seriesSlug: record.series_slug,
+    seriesTitle: record.series_title,
+    slug: record.slug,
+    title: record.title,
+    description: record.description,
+    resolutionSource: record.resolution_source,
+    resolutionText: record.resolution_text,
+    category: record.category,
+    subcategory: record.subcategory,
+    tags: parseJson<string[]>(record.tags_json, []),
+    outcomes: parseJson<string[]>(record.outcomes_json, []),
+    outcomePrices: parseJson<number[]>(record.outcome_prices_json, []),
+    clobTokenIds: parseJson<string[]>(record.clob_token_ids_json, []),
+    yesTokenId: record.yes_token_id,
+    noTokenId: record.no_token_id,
+    active: intToBool(record.active),
+    closed: intToBool(record.closed),
+    archived: intToBool(record.archived),
+    restricted: intToBool(record.restricted),
+    acceptingOrders: intToBool(record.accepting_orders),
+    enableOrderBook: intToBool(record.enable_order_book),
+    startDate: record.start_date,
+    endDate: record.end_date,
+    createdAt: record.created_at,
+    updatedAt: record.updated_at,
+    liquidityUsd: asNumber(record.liquidity_usd),
+    liquidityClobUsd: asNumber(record.liquidity_clob_usd),
+    volumeUsd: asNumber(record.volume_usd),
+    volume24hUsd: asNumber(record.volume_24h_usd),
+    volume7dUsd: asNumber(record.volume_7d_usd),
+    volume30dUsd: asNumber(record.volume_30d_usd),
+    impliedProb: asNumber(record.implied_prob),
+    lastTradePrice: asNumber(record.last_trade_price),
+    bestBid: asNumber(record.best_bid),
+    bestAsk: asNumber(record.best_ask),
+    midpoint: asNumber(record.midpoint),
+    spreadCents: asNumber(record.spread_cents),
+    orderPriceMinTickSize: asNumber(record.order_price_min_tick_size),
+    orderMinSize: asNumber(record.order_min_size),
+    negRisk: intToBool(record.neg_risk),
+    depthUsdWithin2c: asNumber(record.depth_usd_within_2c),
+    depthUsdWithin5c: asNumber(record.depth_usd_within_5c),
+    slippageCentsAt50Usd: asNumber(record.slippage_cents_at_50_usd),
+    slippageCentsAt250Usd: asNumber(record.slippage_cents_at_250_usd),
+    structuralType: record.structural_type,
+    categoryGroup: record.category_group,
+    horizonBucket: record.horizon_bucket,
+    priceBucket: record.price_bucket,
+    liquidityBucket: record.liquidity_bucket,
+    spreadBucket: record.spread_bucket,
+    opportunityMode: record.opportunity_mode,
+    modelabilityScore: asNumber(record.modelability_score),
+    tradabilityScore: asNumber(record.tradability_score),
+    catalystScore: asNumber(record.catalyst_score),
+    resolutionAmbiguityScore: asNumber(record.resolution_ambiguity_score),
+    attentionGapScore: asNumber(record.attention_gap_score),
+    crossMarketScore: asNumber(record.cross_market_score),
+    researchPriorityScore: asNumber(record.research_priority_score),
+    tradeOpportunityScore: asNumber(record.trade_opportunity_score),
+    makerScore: asNumber(record.maker_score),
+    riskScore: asNumber(record.risk_score),
+    reasonCodes: parseJson<string[]>(record.reason_codes_json, []),
+    disqualifiers: parseJson<string[]>(record.disqualifiers_json, []),
+    rawJson: parseJson<Record<string, unknown>>(record.raw_json, {}),
+    capturedAt: record.captured_at
+  };
+}
+
+const UNIVERSE_SORT_SQL: Record<string, string> = {
+  research_priority_desc: "research_priority_score DESC, tradability_score DESC, liquidity_usd DESC",
+  trade_opportunity_desc: "trade_opportunity_score DESC, tradability_score DESC",
+  maker_score_desc: "maker_score DESC, liquidity_usd DESC",
+  liquidity_desc: "liquidity_usd DESC",
+  volume_24h_desc: "volume_24h_usd DESC",
+  ending_soon: "CASE WHEN end_date IS NULL THEN 1 ELSE 0 END ASC, end_date ASC",
+  attention_gap_desc: "attention_gap_score DESC, modelability_score DESC",
+  spread_asc: "CASE WHEN spread_cents IS NULL THEN 1 ELSE 0 END ASC, spread_cents ASC",
+  risk_desc: "risk_score DESC"
+};
+
+function clampScore(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Number(value.toFixed(2))));
+}
+
+function normalizeClusterText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function titleCaseClusterLabel(value: string): string {
+  return value
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function deriveTitleCluster(title: string): { key: string; title: string; basis: string } | undefined {
+  const trimmed = title.trim();
+  const patterns = [
+    /^will\s+.+?\s+win\s+(?:the\s+)?(.+?)(?:\?)?$/i,
+    /^will\s+.+?\s+(?:qualify|advance|finish|place|top)\s+(?:for|in|at|on)?\s*(.+?)(?:\?)?$/i,
+    /^will\s+.+?\s+be\s+(?:elected|nominated|appointed)\s+(?:as|to|for)?\s*(.+?)(?:\?)?$/i
+  ];
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    const raw = match?.[1]?.trim();
+    if (raw && raw.length >= 5) {
+      const normalized = normalizeClusterText(raw);
+      if (normalized) {
+        return {
+          key: `title-pattern:${normalized}`,
+          title: titleCaseClusterLabel(raw),
+          basis: "title_pattern"
+        };
+      }
+    }
+  }
+
+  const colonPrefix = trimmed.match(/^([^:]{5,80}):\s+.+$/)?.[1]?.trim();
+  if (colonPrefix) {
+    const normalized = normalizeClusterText(colonPrefix);
+    if (normalized) {
+      return {
+        key: `title-prefix:${normalized}`,
+        title: colonPrefix,
+        basis: "title_prefix"
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function universeClusterIdentity(market: Record<string, unknown>): { key: string; title: string; basis: string } {
+  const eventId = firstString(market.eventId);
+  if (eventId) {
+    return {
+      key: `event:${eventId}`,
+      title: firstString(market.eventTitle, market.eventSlug, eventId) ?? eventId,
+      basis: "event_id"
+    };
+  }
+  const eventSlug = firstString(market.eventSlug);
+  if (eventSlug) {
+    return {
+      key: `event-slug:${eventSlug}`,
+      title: firstString(market.eventTitle, eventSlug) ?? eventSlug,
+      basis: "event_slug"
+    };
+  }
+  const titleCluster = deriveTitleCluster(firstString(market.title) ?? "");
+  if (titleCluster) {
+    return titleCluster;
+  }
+  const seriesSlug = firstString(market.seriesSlug);
+  if (seriesSlug) {
+    return {
+      key: `series:${seriesSlug}`,
+      title: firstString(market.seriesTitle, seriesSlug) ?? seriesSlug,
+      basis: "series_slug"
+    };
+  }
+  const marketKey = firstString(market.marketKey) ?? `unknown:${randomUUID()}`;
+  return {
+    key: `single:${marketKey}`,
+    title: firstString(market.eventTitle, market.title, marketKey) ?? marketKey,
+    basis: "single_market"
+  };
+}
+
+function numericRecordValue(record: Record<string, unknown>, key: string): number | undefined {
+  return asNumber(record[key]);
+}
+
+function median(values: number[]): number | undefined {
+  const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
+  if (sorted.length === 0) {
+    return undefined;
+  }
+  const midpoint = Math.floor(sorted.length / 2);
+  const right = sorted[midpoint];
+  if (right === undefined) {
+    return undefined;
+  }
+  if (sorted.length % 2 === 1) {
+    return right;
+  }
+  const left = sorted[midpoint - 1] ?? right;
+  return Number(((left + right) / 2).toFixed(6));
+}
+
+function isOutsiderMarket(
+  market: Record<string, unknown>,
+  filters: Required<Pick<
+    StoredUniverseClusterFilters,
+    "minOutsiderLiquidityUsdc" | "minOutsiderPrice" | "maxOutsiderPrice" | "maxOutsiderSpreadCents"
+  >>
+): boolean {
+  const impliedProb = numericRecordValue(market, "impliedProb");
+  const liquidityUsd = numericRecordValue(market, "liquidityUsd") ?? 0;
+  const spreadCents = numericRecordValue(market, "spreadCents");
+  return (
+    impliedProb !== undefined &&
+    impliedProb >= filters.minOutsiderPrice &&
+    impliedProb <= filters.maxOutsiderPrice &&
+    liquidityUsd >= filters.minOutsiderLiquidityUsdc &&
+    (spreadCents === undefined || spreadCents <= filters.maxOutsiderSpreadCents) &&
+    market.active !== false &&
+    market.closed !== true &&
+    market.archived !== true &&
+    market.restricted !== true &&
+    market.acceptingOrders !== false
+  );
+}
+
+function outsiderConvexityScore(market: Record<string, unknown>, maxOutsiderPrice: number): number {
+  const impliedProb = numericRecordValue(market, "impliedProb") ?? maxOutsiderPrice;
+  const liquidityUsd = numericRecordValue(market, "liquidityUsd") ?? 0;
+  const spreadCents = numericRecordValue(market, "spreadCents") ?? 10;
+  const tradabilityScore = numericRecordValue(market, "tradabilityScore") ?? 0;
+  const researchPriorityScore = numericRecordValue(market, "researchPriorityScore") ?? 0;
+  const cheapnessScore = clampScore(((maxOutsiderPrice - impliedProb) / Math.max(maxOutsiderPrice, 0.01)) * 100);
+  const liquidityScore = clampScore((Math.log10(Math.max(liquidityUsd, 1)) / 6) * 100);
+  const spreadScore = clampScore(((10 - Math.min(spreadCents, 10)) / 10) * 100);
+  return clampScore(
+    cheapnessScore * 0.30 +
+    liquidityScore * 0.20 +
+    spreadScore * 0.20 +
+    tradabilityScore * 0.15 +
+    researchPriorityScore * 0.15
+  );
+}
+
 export class StateStore {
   readonly dbPath: string;
   private readonly db: DatabaseSync;
@@ -551,6 +951,109 @@ export class StateStore {
         FOREIGN KEY(market_key) REFERENCES markets(market_key) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_market_snapshots_market_time ON market_snapshots(market_key, captured_at DESC);
+
+      CREATE TABLE IF NOT EXISTS universe_runs (
+        run_id TEXT PRIMARY KEY,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        source TEXT NOT NULL,
+        active_only INTEGER NOT NULL,
+        closed_included INTEGER NOT NULL,
+        total_events INTEGER NOT NULL DEFAULT 0,
+        total_markets INTEGER NOT NULL DEFAULT 0,
+        enriched_markets INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_universe_runs_started ON universe_runs(started_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_universe_runs_status ON universe_runs(status, started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS universe_markets (
+        run_id TEXT NOT NULL,
+        market_key TEXT NOT NULL,
+        market_id TEXT,
+        condition_id TEXT,
+        question_id TEXT,
+        event_id TEXT,
+        event_slug TEXT,
+        event_title TEXT,
+        series_slug TEXT,
+        series_title TEXT,
+        slug TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        resolution_source TEXT,
+        resolution_text TEXT,
+        category TEXT,
+        subcategory TEXT,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        outcomes_json TEXT NOT NULL DEFAULT '[]',
+        outcome_prices_json TEXT NOT NULL DEFAULT '[]',
+        clob_token_ids_json TEXT NOT NULL DEFAULT '[]',
+        yes_token_id TEXT,
+        no_token_id TEXT,
+        active INTEGER,
+        closed INTEGER,
+        archived INTEGER,
+        restricted INTEGER,
+        accepting_orders INTEGER,
+        enable_order_book INTEGER,
+        start_date TEXT,
+        end_date TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        liquidity_usd REAL,
+        liquidity_clob_usd REAL,
+        volume_usd REAL,
+        volume_24h_usd REAL,
+        volume_7d_usd REAL,
+        volume_30d_usd REAL,
+        implied_prob REAL,
+        last_trade_price REAL,
+        best_bid REAL,
+        best_ask REAL,
+        midpoint REAL,
+        spread_cents REAL,
+        order_price_min_tick_size REAL,
+        order_min_size REAL,
+        neg_risk INTEGER,
+        depth_usd_within_2c REAL,
+        depth_usd_within_5c REAL,
+        slippage_cents_at_50_usd REAL,
+        slippage_cents_at_250_usd REAL,
+        structural_type TEXT,
+        category_group TEXT,
+        horizon_bucket TEXT,
+        price_bucket TEXT,
+        liquidity_bucket TEXT,
+        spread_bucket TEXT,
+        opportunity_mode TEXT,
+        modelability_score REAL,
+        tradability_score REAL,
+        catalyst_score REAL,
+        resolution_ambiguity_score REAL,
+        attention_gap_score REAL,
+        cross_market_score REAL,
+        research_priority_score REAL,
+        trade_opportunity_score REAL,
+        maker_score REAL,
+        risk_score REAL,
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        disqualifiers_json TEXT NOT NULL DEFAULT '[]',
+        raw_json TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, market_key),
+        FOREIGN KEY(run_id) REFERENCES universe_runs(run_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_universe_markets_run_research ON universe_markets(run_id, research_priority_score DESC);
+      CREATE INDEX IF NOT EXISTS idx_universe_markets_run_trade ON universe_markets(run_id, trade_opportunity_score DESC);
+      CREATE INDEX IF NOT EXISTS idx_universe_markets_run_maker ON universe_markets(run_id, maker_score DESC);
+      CREATE INDEX IF NOT EXISTS idx_universe_markets_run_facets ON universe_markets(run_id, category_group, horizon_bucket, structural_type);
+      CREATE INDEX IF NOT EXISTS idx_universe_markets_market_key ON universe_markets(market_key);
+      CREATE INDEX IF NOT EXISTS idx_universe_markets_condition ON universe_markets(condition_id) WHERE condition_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_universe_markets_slug ON universe_markets(slug) WHERE slug IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS order_previews (
         preview_id TEXT PRIMARY KEY,
@@ -923,6 +1426,625 @@ export class StateStore {
       relatedMarkets: parseJson<Array<Record<string, unknown>>>(record.related_markets_json, []),
       snapshot: parseJson<Record<string, unknown>>(record.snapshot_json, {})
     };
+  }
+
+  startUniverseRun(input: StoredUniverseRunInput): string {
+    const runId = input.runId ?? randomUUID();
+    const startedAt = input.startedAt ?? nowIso();
+    this.db.prepare(`
+      INSERT OR REPLACE INTO universe_runs (
+        run_id, started_at, completed_at, source, active_only, closed_included,
+        total_events, total_markets, enriched_markets, status, metadata_json, error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      runId,
+      startedAt,
+      input.completedAt ?? null,
+      input.source,
+      input.activeOnly ? 1 : 0,
+      input.closedIncluded ? 1 : 0,
+      input.totalEvents ?? 0,
+      input.totalMarkets ?? 0,
+      input.enrichedMarkets ?? 0,
+      input.status,
+      jsonString(input.metadata ?? {}, {}),
+      input.error ?? null
+    );
+    return runId;
+  }
+
+  completeUniverseRun(runId: string, patch: Partial<StoredUniverseRunInput>): void {
+    const existing = this.getUniverseRun(runId);
+    if (!existing) {
+      return;
+    }
+    const startedAt = typeof existing.startedAt === "string" ? existing.startedAt : nowIso();
+    this.db.prepare(`
+      UPDATE universe_runs
+      SET started_at = ?,
+          completed_at = ?,
+          source = ?,
+          active_only = ?,
+          closed_included = ?,
+          total_events = ?,
+          total_markets = ?,
+          enriched_markets = ?,
+          status = ?,
+          metadata_json = ?,
+          error = ?
+      WHERE run_id = ?
+    `).run(
+      patch.startedAt ?? startedAt,
+      patch.completedAt ?? nowIso(),
+      patch.source ?? String(existing.source ?? ""),
+      boolToInt(patch.activeOnly ?? Boolean(existing.activeOnly)) ?? 0,
+      boolToInt(patch.closedIncluded ?? Boolean(existing.closedIncluded)) ?? 0,
+      patch.totalEvents ?? asNumber(existing.totalEvents) ?? 0,
+      patch.totalMarkets ?? asNumber(existing.totalMarkets) ?? 0,
+      patch.enrichedMarkets ?? asNumber(existing.enrichedMarkets) ?? 0,
+      patch.status ?? String(existing.status ?? "completed"),
+      jsonString(patch.metadata ?? (existing.metadata as Record<string, unknown> | undefined) ?? {}, {}),
+      patch.error ?? (typeof existing.error === "string" ? existing.error : null),
+      runId
+    );
+  }
+
+  recordUniverseMarkets(runId: string, markets: StoredUniverseMarketInput[]): number {
+    if (markets.length === 0) {
+      return 0;
+    }
+
+    const insertUniverseMarketColumns = [
+      "run_id",
+      "market_key",
+      "market_id",
+      "condition_id",
+      "question_id",
+      "event_id",
+      "event_slug",
+      "event_title",
+      "series_slug",
+      "series_title",
+      "slug",
+      "title",
+      "description",
+      "resolution_source",
+      "resolution_text",
+      "category",
+      "subcategory",
+      "tags_json",
+      "outcomes_json",
+      "outcome_prices_json",
+      "clob_token_ids_json",
+      "yes_token_id",
+      "no_token_id",
+      "active",
+      "closed",
+      "archived",
+      "restricted",
+      "accepting_orders",
+      "enable_order_book",
+      "start_date",
+      "end_date",
+      "created_at",
+      "updated_at",
+      "liquidity_usd",
+      "liquidity_clob_usd",
+      "volume_usd",
+      "volume_24h_usd",
+      "volume_7d_usd",
+      "volume_30d_usd",
+      "implied_prob",
+      "last_trade_price",
+      "best_bid",
+      "best_ask",
+      "midpoint",
+      "spread_cents",
+      "order_price_min_tick_size",
+      "order_min_size",
+      "neg_risk",
+      "depth_usd_within_2c",
+      "depth_usd_within_5c",
+      "slippage_cents_at_50_usd",
+      "slippage_cents_at_250_usd",
+      "structural_type",
+      "category_group",
+      "horizon_bucket",
+      "price_bucket",
+      "liquidity_bucket",
+      "spread_bucket",
+      "opportunity_mode",
+      "modelability_score",
+      "tradability_score",
+      "catalyst_score",
+      "resolution_ambiguity_score",
+      "attention_gap_score",
+      "cross_market_score",
+      "research_priority_score",
+      "trade_opportunity_score",
+      "maker_score",
+      "risk_score",
+      "reason_codes_json",
+      "disqualifiers_json",
+      "raw_json",
+      "captured_at"
+    ];
+    const insertUniverseMarket = this.db.prepare(`
+      INSERT OR REPLACE INTO universe_markets (
+        ${insertUniverseMarketColumns.join(", ")}
+      ) VALUES (${insertUniverseMarketColumns.map(() => "?").join(", ")})
+    `);
+
+    const upsertMarket = this.db.prepare(`
+      INSERT INTO markets (
+        market_key, market_id, condition_id, event_id, slug, title, category, end_date,
+        yes_token_id, no_token_id, active, closed, tags_json, resolution_text, latest_snapshot_at,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(market_key) DO UPDATE SET
+        market_id = COALESCE(excluded.market_id, markets.market_id),
+        condition_id = COALESCE(excluded.condition_id, markets.condition_id),
+        event_id = COALESCE(excluded.event_id, markets.event_id),
+        slug = COALESCE(excluded.slug, markets.slug),
+        title = COALESCE(excluded.title, markets.title),
+        category = COALESCE(excluded.category, markets.category),
+        end_date = COALESCE(excluded.end_date, markets.end_date),
+        yes_token_id = COALESCE(excluded.yes_token_id, markets.yes_token_id),
+        no_token_id = COALESCE(excluded.no_token_id, markets.no_token_id),
+        active = COALESCE(excluded.active, markets.active),
+        closed = COALESCE(excluded.closed, markets.closed),
+        tags_json = CASE WHEN excluded.tags_json = '[]' THEN markets.tags_json ELSE excluded.tags_json END,
+        resolution_text = COALESCE(excluded.resolution_text, markets.resolution_text),
+        latest_snapshot_at = COALESCE(excluded.latest_snapshot_at, markets.latest_snapshot_at),
+        updated_at = excluded.updated_at
+    `);
+
+    let inserted = 0;
+    this.db.exec("BEGIN");
+    try {
+      for (const market of markets) {
+        const capturedAt = market.capturedAt ?? nowIso();
+        const universeValues: SqlPrimitive[] = [
+          runId,
+          market.marketKey,
+          market.marketId ?? null,
+          market.conditionId ?? null,
+          market.questionId ?? null,
+          market.eventId ?? null,
+          market.eventSlug ?? null,
+          market.eventTitle ?? null,
+          market.seriesSlug ?? null,
+          market.seriesTitle ?? null,
+          market.slug ?? null,
+          market.title,
+          market.description ?? null,
+          market.resolutionSource ?? null,
+          market.resolutionText ?? null,
+          market.category ?? null,
+          market.subcategory ?? null,
+          jsonString(market.tags ?? [], []),
+          jsonString(market.outcomes ?? [], []),
+          jsonString(market.outcomePrices ?? [], []),
+          jsonString(market.clobTokenIds ?? [], []),
+          market.yesTokenId ?? null,
+          market.noTokenId ?? null,
+          boolToInt(market.active),
+          boolToInt(market.closed),
+          boolToInt(market.archived),
+          boolToInt(market.restricted),
+          boolToInt(market.acceptingOrders),
+          boolToInt(market.enableOrderBook),
+          market.startDate ?? null,
+          market.endDate ?? null,
+          market.createdAt ?? null,
+          market.updatedAt ?? null,
+          market.liquidityUsd ?? null,
+          market.liquidityClobUsd ?? null,
+          market.volumeUsd ?? null,
+          market.volume24hUsd ?? null,
+          market.volume7dUsd ?? null,
+          market.volume30dUsd ?? null,
+          market.impliedProb ?? null,
+          market.lastTradePrice ?? null,
+          market.bestBid ?? null,
+          market.bestAsk ?? null,
+          market.midpoint ?? null,
+          market.spreadCents ?? null,
+          market.orderPriceMinTickSize ?? null,
+          market.orderMinSize ?? null,
+          boolToInt(market.negRisk),
+          market.depthUsdWithin2c ?? null,
+          market.depthUsdWithin5c ?? null,
+          market.slippageCentsAt50Usd ?? null,
+          market.slippageCentsAt250Usd ?? null,
+          market.structuralType ?? null,
+          market.categoryGroup ?? null,
+          market.horizonBucket ?? null,
+          market.priceBucket ?? null,
+          market.liquidityBucket ?? null,
+          market.spreadBucket ?? null,
+          market.opportunityMode ?? null,
+          market.modelabilityScore ?? null,
+          market.tradabilityScore ?? null,
+          market.catalystScore ?? null,
+          market.resolutionAmbiguityScore ?? null,
+          market.attentionGapScore ?? null,
+          market.crossMarketScore ?? null,
+          market.researchPriorityScore ?? null,
+          market.tradeOpportunityScore ?? null,
+          market.makerScore ?? null,
+          market.riskScore ?? null,
+          jsonString(market.reasonCodes ?? [], []),
+          jsonString(market.disqualifiers ?? [], []),
+          jsonString(market.rawJson ?? {}, {}),
+          capturedAt
+        ];
+        insertUniverseMarket.run(...universeValues);
+        upsertMarket.run(
+          market.marketKey,
+          market.marketId ?? null,
+          market.conditionId ?? null,
+          market.eventId ?? null,
+          market.slug ?? null,
+          market.title,
+          market.category ?? null,
+          market.endDate ?? null,
+          market.yesTokenId ?? null,
+          market.noTokenId ?? null,
+          boolToInt(market.active),
+          boolToInt(market.closed),
+          jsonString(market.tags ?? [], []),
+          market.resolutionText ?? null,
+          capturedAt,
+          market.createdAt ?? capturedAt,
+          market.updatedAt ?? capturedAt
+        );
+        inserted += 1;
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+
+    return inserted;
+  }
+
+  getLatestUniverseRun(): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM universe_runs
+      ORDER BY started_at DESC, run_id DESC
+      LIMIT 1
+    `).get();
+    return row ? universeRunRowToRecord(row) : null;
+  }
+
+  getUniverseRun(runId: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM universe_runs
+      WHERE run_id = ?
+      LIMIT 1
+    `).get(runId);
+    return row ? universeRunRowToRecord(row) : null;
+  }
+
+  listUniverseMarkets(filters: StoredUniverseListFilters): { runId: string; total: number; markets: Array<Record<string, unknown>> } {
+    const resolvedRunId =
+      filters.runId ??
+      (this.getLatestUniverseRun()?.runId as string | undefined);
+    if (!resolvedRunId) {
+      return { runId: "", total: 0, markets: [] };
+    }
+
+    const limit = Math.max(1, Math.min(500, filters.limit ?? 50));
+    const offset = Math.max(0, filters.offset ?? 0);
+    const where: string[] = ["run_id = ?"];
+    const params: SqlPrimitive[] = [resolvedRunId];
+
+    const addInClause = (column: string, values: string[] | undefined) => {
+      if (!values || values.length === 0) {
+        return;
+      }
+      const normalized = values.map((value) => value.trim()).filter(Boolean);
+      if (normalized.length === 0) {
+        return;
+      }
+      where.push(`${column} IN (${normalized.map(() => "?").join(", ")})`);
+      params.push(...normalized);
+    };
+
+    addInClause("category_group", filters.categoryGroups);
+    addInClause("structural_type", filters.structuralTypes);
+    addInClause("horizon_bucket", filters.horizonBuckets);
+    addInClause("price_bucket", filters.priceBuckets);
+    addInClause("opportunity_mode", filters.opportunityModes);
+
+    if (filters.minLiquidityUsdc !== undefined) {
+      where.push("COALESCE(liquidity_usd, 0) >= ?");
+      params.push(filters.minLiquidityUsdc);
+    }
+    if (filters.minVolume24hUsdc !== undefined) {
+      where.push("COALESCE(volume_24h_usd, 0) >= ?");
+      params.push(filters.minVolume24hUsdc);
+    }
+    if (filters.maxSpreadCents !== undefined) {
+      where.push("spread_cents IS NOT NULL AND spread_cents <= ?");
+      params.push(filters.maxSpreadCents);
+    }
+    if (filters.minTradabilityScore !== undefined) {
+      where.push("COALESCE(tradability_score, 0) >= ?");
+      params.push(filters.minTradabilityScore);
+    }
+    if (filters.minResearchPriorityScore !== undefined) {
+      where.push("COALESCE(research_priority_score, 0) >= ?");
+      params.push(filters.minResearchPriorityScore);
+    }
+    if (filters.maxResolutionAmbiguityScore !== undefined) {
+      where.push("COALESCE(resolution_ambiguity_score, 100) <= ?");
+      params.push(filters.maxResolutionAmbiguityScore);
+    }
+    if (filters.search) {
+      where.push("(lower(title) LIKE ? OR lower(COALESCE(event_title, '')) LIKE ? OR lower(COALESCE(slug, '')) LIKE ?)");
+      const like = `%${filters.search.trim().toLowerCase()}%`;
+      params.push(like, like, like);
+    }
+
+    const baseSql = `
+      SELECT *
+      FROM universe_markets
+      WHERE ${where.join(" AND ")}
+    `;
+    const orderSql = UNIVERSE_SORT_SQL[filters.sort ?? "research_priority_desc"] ?? UNIVERSE_SORT_SQL.research_priority_desc;
+
+    const rawRows = this.db.prepare(`
+      ${baseSql}
+      ORDER BY ${orderSql}
+      LIMIT ?
+      OFFSET ?
+    `).all(...params, Math.max(limit + offset + 200, 500), 0);
+
+    let records = rawRows.map((row) => universeMarketRowToRecord(row));
+    const includeTags = (filters.includeTags ?? []).map((tag) => tag.toLowerCase());
+    const excludeTags = (filters.excludeTags ?? []).map((tag) => tag.toLowerCase());
+    if (includeTags.length > 0) {
+      records = records.filter((record) => {
+        const tags = Array.isArray(record.tags) ? record.tags.map(String) : [];
+        return includeTags.every((tag) => tags.includes(tag));
+      });
+    }
+    if (excludeTags.length > 0) {
+      records = records.filter((record) => {
+        const tags = Array.isArray(record.tags) ? record.tags.map(String) : [];
+        return !excludeTags.some((tag) => tags.includes(tag));
+      });
+    }
+
+    const total = records.length;
+    return {
+      runId: resolvedRunId,
+      total,
+      markets: records.slice(offset, offset + limit)
+    };
+  }
+
+  listUniverseEventClusters(filters: StoredUniverseClusterFilters): { runId: string; total: number; clusters: Array<Record<string, unknown>> } {
+    const resolvedRunId =
+      filters.runId ??
+      (this.getLatestUniverseRun()?.runId as string | undefined);
+    if (!resolvedRunId) {
+      return { runId: "", total: 0, clusters: [] };
+    }
+
+    const profile = filters.profile ?? "outsider-convexity";
+    const minMarketCount = Math.max(2, filters.minMarketCount ?? (profile === "outsider-convexity" ? 6 : 8));
+    const minOutsiderCount = Math.max(0, filters.minOutsiderCount ?? (profile === "outsider-convexity" ? 2 : 0));
+    const minClusterLiquidityUsdc = Math.max(0, filters.minClusterLiquidityUsdc ?? 0);
+    const outsiderFilters = {
+      minOutsiderLiquidityUsdc: Math.max(0, filters.minOutsiderLiquidityUsdc ?? 1_000),
+      minOutsiderPrice: Math.max(0, filters.minOutsiderPrice ?? 0.005),
+      maxOutsiderPrice: Math.min(0.5, Math.max(0.01, filters.maxOutsiderPrice ?? 0.30)),
+      maxOutsiderSpreadCents: Math.max(0, filters.maxOutsiderSpreadCents ?? 8)
+    };
+    const limit = Math.max(1, Math.min(100, filters.limit ?? 25));
+    const marketsPerCluster = Math.max(1, Math.min(50, filters.marketsPerCluster ?? 8));
+    const where: string[] = ["run_id = ?"];
+    const params: SqlPrimitive[] = [resolvedRunId];
+
+    if (filters.categoryGroups && filters.categoryGroups.length > 0) {
+      const normalized = filters.categoryGroups.map((value) => value.trim()).filter(Boolean);
+      if (normalized.length > 0) {
+        where.push(`category_group IN (${normalized.map(() => "?").join(", ")})`);
+        params.push(...normalized);
+      }
+    }
+    if (filters.search) {
+      where.push("(lower(title) LIKE ? OR lower(COALESCE(event_title, '')) LIKE ? OR lower(COALESCE(event_slug, '')) LIKE ? OR lower(COALESCE(series_title, '')) LIKE ?)");
+      const like = `%${filters.search.trim().toLowerCase()}%`;
+      params.push(like, like, like, like);
+    }
+
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM universe_markets
+      WHERE ${where.join(" AND ")}
+    `).all(...params);
+    const groups = new Map<string, {
+      key: string;
+      title: string;
+      basis: string;
+      markets: Array<Record<string, unknown>>;
+    }>();
+
+    for (const row of rows) {
+      const market = universeMarketRowToRecord(row);
+      const identity = universeClusterIdentity(market);
+      const existing = groups.get(identity.key);
+      if (existing) {
+        existing.markets.push(market);
+        continue;
+      }
+      groups.set(identity.key, {
+        key: identity.key,
+        title: identity.title,
+        basis: identity.basis,
+        markets: [market]
+      });
+    }
+
+    const clusters = Array.from(groups.values()).map((group) => {
+      const activeMarkets = group.markets.filter((market) =>
+        market.active !== false &&
+        market.closed !== true &&
+        market.archived !== true &&
+        market.restricted !== true
+      );
+      const outsiderMarkets = group.markets
+        .filter((market) => isOutsiderMarket(market, outsiderFilters))
+        .map((market): Record<string, unknown> => ({
+          ...market,
+          outsiderConvexityScore: outsiderConvexityScore(market, outsiderFilters.maxOutsiderPrice),
+          doublePrice: numericRecordValue(market, "impliedProb") !== undefined
+            ? Number(Math.min(1, (numericRecordValue(market, "impliedProb") ?? 0) * 2).toFixed(6))
+            : undefined
+        }))
+        .sort((left, right) =>
+          (numericRecordValue(right, "outsiderConvexityScore") ?? 0) -
+          (numericRecordValue(left, "outsiderConvexityScore") ?? 0)
+        );
+      const totalLiquidityUsd = group.markets.reduce((sum, market) => sum + (numericRecordValue(market, "liquidityUsd") ?? 0), 0);
+      const totalVolume24hUsd = group.markets.reduce((sum, market) => sum + (numericRecordValue(market, "volume24hUsd") ?? 0), 0);
+      const spreads = group.markets
+        .map((market) => numericRecordValue(market, "spreadCents"))
+        .filter((value): value is number => value !== undefined);
+      const prices = group.markets
+        .map((market) => numericRecordValue(market, "impliedProb"))
+        .filter((value): value is number => value !== undefined);
+      const outsiderAverageScore = outsiderMarkets.length > 0
+        ? outsiderMarkets.reduce((sum, market) => sum + (numericRecordValue(market, "outsiderConvexityScore") ?? 0), 0) / outsiderMarkets.length
+        : 0;
+      const clusterSizeScore = clampScore((Math.log10(Math.max(group.markets.length, 1)) / 2) * 100);
+      const outsiderDensityScore = clampScore((outsiderMarkets.length / Math.max(group.markets.length, 1)) * 100);
+      const liquidityScore = clampScore((Math.log10(Math.max(totalLiquidityUsd, 1)) / 7) * 100);
+      const clusterScore = clampScore(
+        outsiderAverageScore * 0.45 +
+        clusterSizeScore * 0.20 +
+        outsiderDensityScore * 0.20 +
+        liquidityScore * 0.15
+      );
+
+      return {
+        clusterKey: group.key,
+        clusterTitle: group.title,
+        clusterBasis: group.basis,
+        marketCount: group.markets.length,
+        activeMarketCount: activeMarkets.length,
+        outsiderCount: outsiderMarkets.length,
+        longshotCount: group.markets.filter((market) => market.priceBucket === "longshot-0-10c").length,
+        cheapCount: group.markets.filter((market) => market.priceBucket === "cheap-10-30c").length,
+        totalLiquidityUsd: Number(totalLiquidityUsd.toFixed(6)),
+        totalVolume24hUsd: Number(totalVolume24hUsd.toFixed(6)),
+        medianSpreadCents: median(spreads),
+        minImpliedProb: prices.length > 0 ? Math.min(...prices) : undefined,
+        maxImpliedProb: prices.length > 0 ? Math.max(...prices) : undefined,
+        categoryGroups: Array.from(new Set(group.markets.map((market) => firstString(market.categoryGroup)).filter(Boolean))).sort(),
+        horizonBuckets: Array.from(new Set(group.markets.map((market) => firstString(market.horizonBucket)).filter(Boolean))).sort(),
+        structuralTypes: Array.from(new Set(group.markets.map((market) => firstString(market.structuralType)).filter(Boolean))).sort(),
+        reasonCodes: [
+          group.markets.length >= minMarketCount ? "large_market_cluster" : undefined,
+          outsiderMarkets.length >= minOutsiderCount && minOutsiderCount > 0 ? "multiple_tradeable_outsiders" : undefined,
+          outsiderMarkets.some((market) => market["priceBucket"] === "longshot-0-10c") ? "has_longshot_outsiders" : undefined,
+          group.markets.some((market) => market.negRisk === true) ? "neg_risk_cluster" : undefined
+        ].filter(Boolean),
+        outsiderConvexityScore: clusterScore,
+        outsiderMarkets: outsiderMarkets.slice(0, marketsPerCluster)
+      };
+    }).filter((cluster) =>
+      (numericRecordValue(cluster, "marketCount") ?? 0) >= minMarketCount &&
+      (numericRecordValue(cluster, "outsiderCount") ?? 0) >= minOutsiderCount &&
+      (numericRecordValue(cluster, "totalLiquidityUsd") ?? 0) >= minClusterLiquidityUsdc
+    );
+
+    clusters.sort((left, right) => {
+      switch (filters.sort ?? "outsider_convexity_desc") {
+        case "market_count_desc":
+          return (numericRecordValue(right, "marketCount") ?? 0) - (numericRecordValue(left, "marketCount") ?? 0);
+        case "liquidity_desc":
+          return (numericRecordValue(right, "totalLiquidityUsd") ?? 0) - (numericRecordValue(left, "totalLiquidityUsd") ?? 0);
+        default:
+          return (numericRecordValue(right, "outsiderConvexityScore") ?? 0) - (numericRecordValue(left, "outsiderConvexityScore") ?? 0);
+      }
+    });
+
+    return {
+      runId: resolvedRunId,
+      total: clusters.length,
+      clusters: clusters.slice(0, limit)
+    };
+  }
+
+  getUniverseFacets(runId?: string): Record<string, unknown> {
+    const resolvedRunId =
+      runId ??
+      (this.getLatestUniverseRun()?.runId as string | undefined);
+    if (!resolvedRunId) {
+      return {
+        runId: "",
+        totalMarkets: 0,
+        latestRun: null,
+        categoryGroups: {},
+        horizonBuckets: {},
+        structuralTypes: {},
+        priceBuckets: {},
+        liquidityBuckets: {},
+        spreadBuckets: {},
+        opportunityModes: {}
+      };
+    }
+
+    const countBy = (column: string) =>
+      this.db.prepare(`
+        SELECT ${column} AS value, COUNT(*) AS count
+        FROM universe_markets
+        WHERE run_id = ?
+        GROUP BY ${column}
+        ORDER BY COUNT(*) DESC, ${column} ASC
+      `).all(resolvedRunId).reduce((acc, row) => {
+        const record = rowRecord(row);
+        const key = String(record.value ?? "unknown");
+        acc[key] = Number(record.count ?? 0);
+        return acc;
+      }, {} as Record<string, number>);
+
+    const totalRow = rowRecord(this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM universe_markets
+      WHERE run_id = ?
+    `).get(resolvedRunId));
+
+    return {
+      runId: resolvedRunId,
+      totalMarkets: Number(totalRow.count ?? 0),
+      latestRun: this.getUniverseRun(resolvedRunId),
+      categoryGroups: countBy("category_group"),
+      horizonBuckets: countBy("horizon_bucket"),
+      structuralTypes: countBy("structural_type"),
+      priceBuckets: countBy("price_bucket"),
+      liquidityBuckets: countBy("liquidity_bucket"),
+      spreadBuckets: countBy("spread_bucket"),
+      opportunityModes: countBy("opportunity_mode")
+    };
+  }
+
+  getUniverseMarket(runId: string, marketKey: string): Record<string, unknown> | null {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM universe_markets
+      WHERE run_id = ? AND market_key = ?
+      LIMIT 1
+    `).get(runId, marketKey);
+    return row ? universeMarketRowToRecord(row) : null;
   }
 
   storePreview(preview: StoredPreviewRecord): StoredPreviewRecord {
@@ -1908,6 +3030,8 @@ export class StateStore {
     const counts = {
       markets: this.preparedCount("markets"),
       marketSnapshots: this.preparedCount("market_snapshots"),
+      universeRuns: this.preparedCount("universe_runs"),
+      universeMarkets: this.preparedCount("universe_markets"),
       alerts: this.preparedCount("alerts"),
       developments: this.preparedCount("developments"),
       researchRuns: this.preparedCount("research_runs"),

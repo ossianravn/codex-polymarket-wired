@@ -18,6 +18,12 @@ It does **not** place trades.
 watchlist-scan -> opportunity-classifier -> deep-market-research -> strategy-draft -> order-ticket
 ```
 
+Universe-discovery handoff:
+
+```txt
+bet-discovery -> opportunity-classifier -> deep-market-research -> strategy-draft -> order-ticket
+```
+
 For a single market:
 
 ```txt
@@ -85,3 +91,7 @@ If the taxonomy proves useful at scale, add a small MCP helper that computes raw
 - grouped-basket probability sums
 
 Keep the final judgment and tiering in the skill layer even if you later add that helper.
+
+## universe handoff
+
+Universe discovery computes deterministic first-pass facets and triage scores. The `opportunity-classifier` skill should refine only shortlisted candidates, not classify every market in the universe.

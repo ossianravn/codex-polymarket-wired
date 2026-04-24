@@ -56,6 +56,9 @@ The order-preview flow and executor position sync also write automatically to SQ
 The important persistent layers are:
 - **markets** — canonical identifiers plus latest-known titles and metadata
 - **market_snapshots** — append-only facts over time
+- **universe_runs** — one record per full-universe ingestion run
+- **universe_markets** — the canonical discovery snapshot for each run, including facets, scores, and enrichment fields
+- event clusters — derived at query time from `universe_markets`; no separate table is required
 - **developments / alerts** — catalysts, watcher signals, and structured changes
 - **research_runs / evidence_items** — synthesized research and supporting evidence
 - **classifications** — opportunity scores, disqualifiers, and tier decisions
@@ -70,6 +73,17 @@ The important persistent layers are:
 - Derived artifacts such as classifications, thesis links, and research runs are versionable records rather than mutable fields on the market row.
 - Portfolio data is snapshotted so exposure history is auditable.
 - Watcher alerts still mirror into the JSON cache for compatibility, but SQLite is now the primary local source of truth.
+- Universe discovery uses its own snapshot tables rather than flooding `market_snapshots` for every scanned market.
+- Many-participant event detection is derived from event IDs, event slugs, title patterns, and series fallback fields in `universe_markets`.
+
+## universe retention
+
+Universe scans can be large. The current implementation keeps all runs until manual cleanup.
+
+Recommended retention policy:
+- keep the latest 30 successful runs
+- keep failed runs only while debugging
+- treat `universe_markets` as the canonical stored output for discovery, not as a replacement for researched market state
 
 ## thesis-aware usage
 

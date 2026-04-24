@@ -4,6 +4,7 @@
 
 Good automation tasks:
 - watchlist scans
+- universe discovery and candidate triage
 - opportunity triage
 - catalyst drift checks
 - resolution watch
@@ -24,6 +25,8 @@ Avoid in the Codex app:
 - prefer worktrees for git repos
 - keep execution disabled for unattended runs in v1
 - prefer `watchlist-scan -> opportunity-classifier -> deep-market-research` for recurring discovery
+- prefer `$bet-discovery` for full-universe browsing and shortlist generation before deeper research
+- keep Codex automations in analyst/triage mode rather than continuous trading or order-maintenance loops
 
 ## suggested cadences
 

@@ -37,13 +37,28 @@ import {
   type Side
 } from "../../../packages/polymarket-core/src/index.js";
 import {
+  applyUniverseViewDefaults,
+  enrichUniverseMarkets,
+  filtersForCandidateProfile,
+  ingestUniverseMarkets,
+  loadDiscoveryPolicies,
+  normalizeUniverseMarketForStorage,
+  type CandidateProfile,
+  type DiscoveryPolicies,
+  type ListUniverseFilters,
+  type UniverseMarket
+} from "../../../packages/market-universe/src/index.js";
+import {
   computePolicyHash,
   evaluatePolicy,
   loadRiskLimits,
   type RiskLimits
 } from "../../../packages/policy-engine/src/index.js";
 import { TOOLS } from "./tool-specs.js";
-import { openStateStore } from "../../../packages/state-store/src/index.js";
+import {
+  openStateStore,
+  type StoredUniverseMarketInput
+} from "../../../packages/state-store/src/index.js";
 import {
   buildExecutionQueue,
   listStrategyCandidates,
@@ -588,11 +603,18 @@ interface BookmarkSyncOptions {
   include_related_markets: boolean;
   include_comments: boolean;
   scope: "watchlist" | "portfolio" | "all";
+  description?: string;
 }
 
-export function mergeBookmarkedMarketsIntoWatchlistsYaml(
+export interface WatchlistMergeMarket {
+  title: string;
+  identifierType: "slug" | "condition_id" | "market_id" | "token_id";
+  identifier: string;
+}
+
+export function mergeMarketsIntoWatchlistsYaml(
   rawYaml: string,
-  bookmarks: { markets: BookmarkedMarketSummary[] },
+  marketsInput: { markets: WatchlistMergeMarket[] },
   options: BookmarkSyncOptions
 ): {
   yaml: string;
@@ -602,7 +624,7 @@ export function mergeBookmarkedMarketsIntoWatchlistsYaml(
 } {
   const parsed = (YAML.parse(rawYaml) ?? {}) as Record<string, unknown>;
   const watchlists = Array.isArray(parsed.watchlists) ? [...parsed.watchlists] : [];
-  const syncedMarkets = bookmarks.markets.map((market) => ({
+  const syncedMarkets = marketsInput.markets.map((market) => ({
     identifier_type: market.identifierType,
     identifier: market.identifier,
     move_threshold_pct_points: options.move_threshold_pct_points,
@@ -614,7 +636,7 @@ export function mergeBookmarkedMarketsIntoWatchlistsYaml(
 
   const nextGroup = {
     name: options.watchlist_name,
-    description: "synced from Polymarket website bookmarks",
+    description: options.description ?? "managed Polymarket watchlist",
     markets: syncedMarkets
   };
 
@@ -663,6 +685,420 @@ export function mergeBookmarkedMarketsIntoWatchlistsYaml(
     marketCount: syncedMarkets.length,
     replacedExistingGroup
   };
+}
+
+export function mergeBookmarkedMarketsIntoWatchlistsYaml(
+  rawYaml: string,
+  bookmarks: { markets: BookmarkedMarketSummary[] },
+  options: BookmarkSyncOptions
+) {
+  return mergeMarketsIntoWatchlistsYaml(rawYaml, bookmarks, {
+    ...options,
+    description: options.description ?? "synced from Polymarket website bookmarks"
+  });
+}
+
+async function discoveryPoliciesForConfig(
+  config = loadRuntimeConfig()
+): Promise<DiscoveryPolicies> {
+  return await loadDiscoveryPolicies(path.resolve(config.cwd, "configs/discovery-policies.yaml"));
+}
+
+function universeMarketFromStoredRecord(record: Record<string, unknown>): UniverseMarket {
+  const rawJson = (record.rawJson ?? {}) as Record<string, unknown>;
+  return {
+    marketKey: String(record.marketKey ?? ""),
+    source: "markets_keyset",
+    marketId: firstString(record.marketId),
+    conditionId: firstString(record.conditionId),
+    questionId: firstString(record.questionId),
+    eventId: firstString(record.eventId),
+    eventSlug: firstString(record.eventSlug),
+    eventTitle: firstString(record.eventTitle),
+    seriesSlug: firstString(record.seriesSlug),
+    seriesTitle: firstString(record.seriesTitle),
+    slug: firstString(record.slug),
+    title: firstString(record.title) ?? "Untitled market",
+    description: firstString(record.description),
+    resolutionSource: firstString(record.resolutionSource),
+    resolutionText: firstString(record.resolutionText),
+    category: firstString(record.category),
+    subcategory: firstString(record.subcategory),
+    tags: Array.isArray(record.tags) ? record.tags.map(String) : [],
+    outcomes: Array.isArray(record.outcomes) ? record.outcomes.map(String) : [],
+    outcomePrices: Array.isArray(record.outcomePrices) ? record.outcomePrices.map((value) => Number(value)) : [],
+    clobTokenIds: Array.isArray(record.clobTokenIds) ? record.clobTokenIds.map(String) : [],
+    yesTokenId: firstString(record.yesTokenId),
+    noTokenId: firstString(record.noTokenId),
+    active: typeof record.active === "boolean" ? record.active : undefined,
+    closed: typeof record.closed === "boolean" ? record.closed : undefined,
+    archived: typeof record.archived === "boolean" ? record.archived : undefined,
+    restricted: typeof record.restricted === "boolean" ? record.restricted : undefined,
+    acceptingOrders: typeof record.acceptingOrders === "boolean" ? record.acceptingOrders : undefined,
+    enableOrderBook: typeof record.enableOrderBook === "boolean" ? record.enableOrderBook : undefined,
+    startDate: firstString(record.startDate),
+    endDate: firstString(record.endDate),
+    endDateIso: firstString(record.endDate),
+    eventStartTime: firstString(record.eventStartTime),
+    createdAt: firstString(record.createdAt),
+    updatedAt: firstString(record.updatedAt),
+    liquidityUsd: numericValue(record.liquidityUsd),
+    liquidityClobUsd: numericValue(record.liquidityClobUsd),
+    volumeUsd: numericValue(record.volumeUsd),
+    volume24hUsd: numericValue(record.volume24hUsd),
+    volume7dUsd: numericValue(record.volume7dUsd),
+    volume30dUsd: numericValue(record.volume30dUsd),
+    openInterestUsd: numericValue(record.openInterestUsd),
+    impliedProb: numericValue(record.impliedProb),
+    lastTradePrice: numericValue(record.lastTradePrice),
+    bestBid: numericValue(record.bestBid),
+    bestAsk: numericValue(record.bestAsk),
+    midpoint: numericValue(record.midpoint),
+    spreadCents: numericValue(record.spreadCents),
+    orderPriceMinTickSize: numericValue(record.orderPriceMinTickSize),
+    orderMinSize: numericValue(record.orderMinSize),
+    negRisk: typeof record.negRisk === "boolean" ? record.negRisk : undefined,
+    sportsMarketType: firstString(record.sportsMarketType),
+    line: numericValue(record.line),
+    depthUsdWithin2c: numericValue(record.depthUsdWithin2c),
+    depthUsdWithin5c: numericValue(record.depthUsdWithin5c),
+    slippageCentsAt50Usd: numericValue(record.slippageCentsAt50Usd),
+    slippageCentsAt250Usd: numericValue(record.slippageCentsAt250Usd),
+    structuralType: String(record.structuralType ?? "unknown") as UniverseMarket["structuralType"],
+    categoryGroup: String(record.categoryGroup ?? "other") as UniverseMarket["categoryGroup"],
+    horizonBucket: String(record.horizonBucket ?? "unknown") as UniverseMarket["horizonBucket"],
+    priceBucket: String(record.priceBucket ?? "unknown") as UniverseMarket["priceBucket"],
+    liquidityBucket: String(record.liquidityBucket ?? "unknown") as UniverseMarket["liquidityBucket"],
+    spreadBucket: String(record.spreadBucket ?? "unknown") as UniverseMarket["spreadBucket"],
+    opportunityMode: String(record.opportunityMode ?? "deep-research") as UniverseMarket["opportunityMode"],
+    modelabilityScore: numericValue(record.modelabilityScore) ?? 0,
+    tradabilityScore: numericValue(record.tradabilityScore) ?? 0,
+    catalystScore: numericValue(record.catalystScore) ?? 0,
+    resolutionAmbiguityScore: numericValue(record.resolutionAmbiguityScore) ?? 0,
+    attentionGapScore: numericValue(record.attentionGapScore) ?? 0,
+    crossMarketScore: numericValue(record.crossMarketScore) ?? 0,
+    researchPriorityScore: numericValue(record.researchPriorityScore) ?? 0,
+    tradeOpportunityScore: numericValue(record.tradeOpportunityScore) ?? 0,
+    makerScore: numericValue(record.makerScore) ?? 0,
+    riskScore: numericValue(record.riskScore) ?? 0,
+    reasonCodes: Array.isArray(record.reasonCodes) ? record.reasonCodes.map(String) : [],
+    disqualifiers: Array.isArray(record.disqualifiers) ? record.disqualifiers.map(String) : [],
+    rawGammaMarket: rawJson.rawGammaMarket,
+    rawGammaEvent: rawJson.rawGammaEvent
+  };
+}
+
+function universeMarketToStoredInput(
+  runId: string,
+  market: UniverseMarket,
+  capturedAt: string
+): StoredUniverseMarketInput {
+  const normalized = normalizeUniverseMarketForStorage(market) as Record<string, unknown>;
+  return {
+    runId,
+    marketKey: String(normalized.marketKey ?? market.marketKey),
+    title: String(normalized.title ?? market.title),
+    marketId: firstString(normalized.marketId),
+    conditionId: firstString(normalized.conditionId),
+    questionId: firstString(normalized.questionId),
+    eventId: firstString(normalized.eventId),
+    eventSlug: firstString(normalized.eventSlug),
+    eventTitle: firstString(normalized.eventTitle),
+    seriesSlug: firstString(normalized.seriesSlug),
+    seriesTitle: firstString(normalized.seriesTitle),
+    slug: firstString(normalized.slug),
+    description: firstString(normalized.description),
+    resolutionSource: firstString(normalized.resolutionSource),
+    resolutionText: firstString(normalized.resolutionText),
+    category: firstString(normalized.category),
+    subcategory: firstString(normalized.subcategory),
+    tags: Array.isArray(normalized.tags) ? normalized.tags.map(String) : [],
+    outcomes: Array.isArray(normalized.outcomes) ? normalized.outcomes.map(String) : [],
+    outcomePrices: Array.isArray(normalized.outcomePrices) ? normalized.outcomePrices.map((value) => Number(value)) : [],
+    clobTokenIds: Array.isArray(normalized.clobTokenIds) ? normalized.clobTokenIds.map(String) : [],
+    yesTokenId: firstString(normalized.yesTokenId),
+    noTokenId: firstString(normalized.noTokenId),
+    active: typeof normalized.active === "boolean" ? normalized.active : undefined,
+    closed: typeof normalized.closed === "boolean" ? normalized.closed : undefined,
+    archived: typeof normalized.archived === "boolean" ? normalized.archived : undefined,
+    restricted: typeof normalized.restricted === "boolean" ? normalized.restricted : undefined,
+    acceptingOrders: typeof normalized.acceptingOrders === "boolean" ? normalized.acceptingOrders : undefined,
+    enableOrderBook: typeof normalized.enableOrderBook === "boolean" ? normalized.enableOrderBook : undefined,
+    startDate: firstString(normalized.startDate),
+    endDate: firstString(normalized.endDate),
+    createdAt: firstString(normalized.createdAt),
+    updatedAt: firstString(normalized.updatedAt),
+    liquidityUsd: numericValue(normalized.liquidityUsd),
+    liquidityClobUsd: numericValue(normalized.liquidityClobUsd),
+    volumeUsd: numericValue(normalized.volumeUsd),
+    volume24hUsd: numericValue(normalized.volume24hUsd),
+    volume7dUsd: numericValue(normalized.volume7dUsd),
+    volume30dUsd: numericValue(normalized.volume30dUsd),
+    impliedProb: numericValue(normalized.impliedProb),
+    lastTradePrice: numericValue(normalized.lastTradePrice),
+    bestBid: numericValue(normalized.bestBid),
+    bestAsk: numericValue(normalized.bestAsk),
+    midpoint: numericValue(normalized.midpoint),
+    spreadCents: numericValue(normalized.spreadCents),
+    orderPriceMinTickSize: numericValue(normalized.orderPriceMinTickSize),
+    orderMinSize: numericValue(normalized.orderMinSize),
+    negRisk: typeof normalized.negRisk === "boolean" ? normalized.negRisk : undefined,
+    depthUsdWithin2c: numericValue(normalized.depthUsdWithin2c),
+    depthUsdWithin5c: numericValue(normalized.depthUsdWithin5c),
+    slippageCentsAt50Usd: numericValue(normalized.slippageCentsAt50Usd),
+    slippageCentsAt250Usd: numericValue(normalized.slippageCentsAt250Usd),
+    structuralType: firstString(normalized.structuralType),
+    categoryGroup: firstString(normalized.categoryGroup),
+    horizonBucket: firstString(normalized.horizonBucket),
+    priceBucket: firstString(normalized.priceBucket),
+    liquidityBucket: firstString(normalized.liquidityBucket),
+    spreadBucket: firstString(normalized.spreadBucket),
+    opportunityMode: firstString(normalized.opportunityMode),
+    modelabilityScore: numericValue(normalized.modelabilityScore),
+    tradabilityScore: numericValue(normalized.tradabilityScore),
+    catalystScore: numericValue(normalized.catalystScore),
+    resolutionAmbiguityScore: numericValue(normalized.resolutionAmbiguityScore),
+    attentionGapScore: numericValue(normalized.attentionGapScore),
+    crossMarketScore: numericValue(normalized.crossMarketScore),
+    researchPriorityScore: numericValue(normalized.researchPriorityScore),
+    tradeOpportunityScore: numericValue(normalized.tradeOpportunityScore),
+    makerScore: numericValue(normalized.makerScore),
+    riskScore: numericValue(normalized.riskScore),
+    reasonCodes: Array.isArray(normalized.reasonCodes) ? normalized.reasonCodes.map(String) : [],
+    disqualifiers: Array.isArray(normalized.disqualifiers) ? normalized.disqualifiers.map(String) : [],
+    rawJson: {
+      rawGammaMarket: market.rawGammaMarket,
+      rawGammaEvent: market.rawGammaEvent
+    },
+    capturedAt
+  };
+}
+
+function recommendedUniverseHandoff(market: Record<string, unknown>): string {
+  const opportunityMode = String(market.opportunityMode ?? "");
+  if (opportunityMode === "market-making") {
+    return "maker-rewards-check";
+  }
+  if (opportunityMode === "resolution-watch") {
+    return "resolution-watch";
+  }
+  if ((numericValue(market.tradeOpportunityScore) ?? 0) >= 70) {
+    return "opportunity-classifier";
+  }
+  return "deep-market-research";
+}
+
+function formatUniverseMarketRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return {
+    market_key: record.marketKey,
+    title: record.title,
+    slug: record.slug,
+    event_title: record.eventTitle,
+    category_group: record.categoryGroup,
+    structural_type: record.structuralType,
+    horizon_bucket: record.horizonBucket,
+    price_bucket: record.priceBucket,
+    liquidity_bucket: record.liquidityBucket,
+    spread_bucket: record.spreadBucket,
+    opportunity_mode: record.opportunityMode,
+    implied_prob: record.impliedProb,
+    liquidity_usd: record.liquidityUsd,
+    volume_24h_usd: record.volume24hUsd,
+    best_bid: record.bestBid,
+    best_ask: record.bestAsk,
+    spread_cents: record.spreadCents,
+    end_date: record.endDate,
+    scores: {
+      modelability: record.modelabilityScore,
+      tradability: record.tradabilityScore,
+      catalyst: record.catalystScore,
+      resolution_ambiguity: record.resolutionAmbiguityScore,
+      attention_gap: record.attentionGapScore,
+      research_priority: record.researchPriorityScore,
+      trade_opportunity: record.tradeOpportunityScore,
+      maker: record.makerScore,
+      risk: record.riskScore
+    },
+    reason_codes: record.reasonCodes,
+    disqualifiers: record.disqualifiers,
+    recommended_next_skill: recommendedUniverseHandoff(record)
+  };
+}
+
+function formatUniverseClusterRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const outsiderMarkets = Array.isArray(record.outsiderMarkets)
+    ? record.outsiderMarkets.filter((market): market is Record<string, unknown> => Boolean(market) && typeof market === "object")
+    : [];
+  return {
+    cluster_key: record.clusterKey,
+    cluster_title: record.clusterTitle,
+    cluster_basis: record.clusterBasis,
+    market_count: record.marketCount,
+    active_market_count: record.activeMarketCount,
+    outsider_count: record.outsiderCount,
+    longshot_count: record.longshotCount,
+    cheap_count: record.cheapCount,
+    total_liquidity_usd: record.totalLiquidityUsd,
+    total_volume_24h_usd: record.totalVolume24hUsd,
+    median_spread_cents: record.medianSpreadCents,
+    min_implied_prob: record.minImpliedProb,
+    max_implied_prob: record.maxImpliedProb,
+    category_groups: record.categoryGroups,
+    horizon_buckets: record.horizonBuckets,
+    structural_types: record.structuralTypes,
+    reason_codes: record.reasonCodes,
+    outsider_convexity_score: record.outsiderConvexityScore,
+    outsider_markets: outsiderMarkets.map((market) => ({
+      ...formatUniverseMarketRecord(market),
+      outsider_convexity_score: market.outsiderConvexityScore,
+      double_price: market.doublePrice
+    })),
+    recommended_next_skill: "codex-polymarket:opportunity-classifier"
+  };
+}
+
+function latestUniverseRunAgeMinutes(run: Record<string, unknown> | null): number | undefined {
+  if (!run) {
+    return undefined;
+  }
+  const startedAt = Date.parse(String(run.startedAt ?? run.completedAt ?? ""));
+  if (!Number.isFinite(startedAt)) {
+    return undefined;
+  }
+  return (Date.now() - startedAt) / (1000 * 60);
+}
+
+function listUniverseFiltersFromInput(
+  input: {
+    run_id?: string;
+    view?: string;
+    category_groups?: string[];
+    structural_types?: string[];
+    horizon_buckets?: string[];
+    price_buckets?: string[];
+    opportunity_modes?: string[];
+    min_liquidity_usdc?: number;
+    min_volume_24h_usdc?: number;
+    max_spread_cents?: number;
+    min_tradability_score?: number;
+    min_research_priority_score?: number;
+    max_resolution_ambiguity_score?: number;
+    include_tags?: string[];
+    exclude_tags?: string[];
+    search?: string;
+    sort?: string;
+    limit?: number;
+    offset?: number;
+  },
+  policies: DiscoveryPolicies
+): ListUniverseFilters {
+  return applyUniverseViewDefaults({
+    runId: input.run_id,
+    view: input.view as ListUniverseFilters["view"] | undefined,
+    categoryGroups: input.category_groups as ListUniverseFilters["categoryGroups"],
+    structuralTypes: input.structural_types as ListUniverseFilters["structuralTypes"],
+    horizonBuckets: input.horizon_buckets as ListUniverseFilters["horizonBuckets"],
+    priceBuckets: input.price_buckets as ListUniverseFilters["priceBuckets"],
+    opportunityModes: input.opportunity_modes as ListUniverseFilters["opportunityModes"],
+    minLiquidityUsdc: input.min_liquidity_usdc,
+    minVolume24hUsdc: input.min_volume_24h_usdc,
+    maxSpreadCents: input.max_spread_cents,
+    minTradabilityScore: input.min_tradability_score,
+    minResearchPriorityScore: input.min_research_priority_score,
+    maxResolutionAmbiguityScore: input.max_resolution_ambiguity_score,
+    includeTags: input.include_tags,
+    excludeTags: input.exclude_tags,
+    search: input.search,
+    sort: input.sort as ListUniverseFilters["sort"] | undefined,
+    limit: input.limit,
+    offset: input.offset
+  }, policies);
+}
+
+export async function ingestAndPersistUniverseRun(
+  input: {
+    active_only?: boolean;
+    include_closed?: boolean;
+    source?: "markets_keyset" | "events_keyset" | "both";
+    page_size?: number;
+    limit_pages?: number;
+    min_liquidity_usdc?: number;
+    include_tags?: boolean;
+    order?: string;
+    ascending?: boolean;
+    enrich_top_n?: number;
+    enrichment_profile?: "none" | "microstructure" | "microstructure_and_history";
+  },
+  config = loadRuntimeConfig()
+): Promise<Record<string, unknown>> {
+  const policies = await discoveryPoliciesForConfig(config);
+  const store = currentStateStore(config);
+  const runId = store.startUniverseRun({
+    source: input.source ?? policies.defaults.source,
+    activeOnly: input.active_only ?? policies.defaults.activeOnly,
+    closedIncluded: input.include_closed ?? policies.defaults.includeClosed,
+    status: "running",
+    metadata: {
+      pageSize: input.page_size ?? policies.defaults.pageSize,
+      limitPages: input.limit_pages,
+      order: input.order ?? policies.defaults.order,
+      enrichmentProfile: input.enrichment_profile ?? policies.defaults.enrichmentProfile
+    }
+  });
+
+  try {
+    const result = await ingestUniverseMarkets(config, {
+      activeOnly: input.active_only ?? policies.defaults.activeOnly,
+      includeClosed: input.include_closed ?? policies.defaults.includeClosed,
+      source: input.source ?? policies.defaults.source,
+      pageSize: input.page_size ?? policies.defaults.pageSize,
+      limitPages: input.limit_pages,
+      minLiquidityUsdc: input.min_liquidity_usdc ?? policies.defaults.minLiquidityUsdc,
+      includeTags: input.include_tags ?? policies.defaults.includeTags,
+      order: input.order ?? policies.defaults.order,
+      ascending: input.ascending ?? policies.defaults.ascending,
+      enrichTopN: input.enrich_top_n ?? policies.defaults.enrichTopN,
+      enrichmentProfile: input.enrichment_profile ?? policies.defaults.enrichmentProfile
+    }, policies);
+
+    const capturedAt = new Date().toISOString();
+    store.recordUniverseMarkets(
+      runId,
+      result.markets.map((market) => universeMarketToStoredInput(runId, market, capturedAt))
+    );
+    store.completeUniverseRun(runId, {
+      status: "completed",
+      completedAt: capturedAt,
+      totalEvents: result.rawEvents.length,
+      totalMarkets: result.markets.length,
+      enrichedMarkets: result.enrichedCount
+    });
+
+    return {
+      run_id: runId,
+      source: result.source,
+      total_markets: result.markets.length,
+      enriched_markets: result.enrichedCount,
+      started_at: store.getUniverseRun(runId)?.startedAt,
+      completed_at: capturedAt,
+      top_preview: result.markets
+        .slice()
+        .sort((left, right) => right.researchPriorityScore - left.researchPriorityScore)
+        .slice(0, 5)
+        .map((market) =>
+          formatUniverseMarketRecord({
+            ...(normalizeUniverseMarketForStorage(market) as Record<string, unknown>)
+          })
+        )
+    };
+  } catch (error) {
+    store.completeUniverseRun(runId, {
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      error: String(error)
+    });
+    throw error;
+  }
 }
 
 server.registerTool(
@@ -1012,6 +1448,428 @@ server.registerTool(
       count: queue.length,
       queue
     });
+  }
+);
+
+server.registerTool(
+  "ingest_market_universe",
+  {
+    description: toolDescription("ingest_market_universe"),
+    inputSchema: {
+      active_only: z.boolean().default(true),
+      include_closed: z.boolean().default(false),
+      source: z.enum(["markets_keyset", "events_keyset", "both"]).default("markets_keyset"),
+      page_size: z.number().int().min(1).max(1000).default(1000),
+      limit_pages: z.number().int().min(1).max(1000).optional(),
+      min_liquidity_usdc: z.number().min(0).optional(),
+      include_tags: z.boolean().default(true),
+      order: z.string().max(120).default("volume_num,liquidity_num"),
+      ascending: z.boolean().default(false),
+      enrich_top_n: z.number().int().min(0).max(1000).default(250),
+      enrichment_profile: z.enum(["none", "microstructure", "microstructure_and_history"]).default("microstructure")
+    }
+  },
+  async (input) => {
+    const summary = await ingestAndPersistUniverseRun(input);
+    return textResult(summary);
+  }
+);
+
+server.registerTool(
+  "list_market_universe",
+  {
+    description: toolDescription("list_market_universe"),
+    inputSchema: {
+      run_id: z.string().optional(),
+      view: z.enum([
+        "best_research_candidates",
+        "clean_catalyst_bets",
+        "execution_ready",
+        "market_making_candidates",
+        "cross_market_dislocations",
+        "resolution_watch",
+        "low_attention_modelable",
+        "avoid_or_blocked"
+      ]).optional(),
+      category_groups: z.array(z.string()).max(10).optional(),
+      structural_types: z.array(z.string()).max(10).optional(),
+      horizon_buckets: z.array(z.string()).max(10).optional(),
+      price_buckets: z.array(z.string()).max(10).optional(),
+      opportunity_modes: z.array(z.string()).max(10).optional(),
+      min_liquidity_usdc: z.number().min(0).optional(),
+      min_volume_24h_usdc: z.number().min(0).optional(),
+      max_spread_cents: z.number().min(0).optional(),
+      min_tradability_score: z.number().min(0).max(100).optional(),
+      min_research_priority_score: z.number().min(0).max(100).optional(),
+      max_resolution_ambiguity_score: z.number().min(0).max(100).optional(),
+      include_tags: z.array(z.string()).max(20).optional(),
+      exclude_tags: z.array(z.string()).max(20).optional(),
+      search: z.string().max(200).optional(),
+      sort: z.enum([
+        "research_priority_desc",
+        "trade_opportunity_desc",
+        "maker_score_desc",
+        "liquidity_desc",
+        "volume_24h_desc",
+        "ending_soon",
+        "attention_gap_desc",
+        "spread_asc",
+        "risk_desc"
+      ]).default("research_priority_desc"),
+      limit: z.number().int().min(1).max(200).default(50),
+      offset: z.number().int().min(0).default(0)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const policies = await discoveryPoliciesForConfig(config);
+    const store = currentStateStore(config);
+    const filters = listUniverseFiltersFromInput(input, policies);
+    const result = store.listUniverseMarkets({
+      runId: filters.runId,
+      view: filters.view,
+      categoryGroups: filters.categoryGroups,
+      structuralTypes: filters.structuralTypes,
+      horizonBuckets: filters.horizonBuckets,
+      priceBuckets: filters.priceBuckets,
+      opportunityModes: filters.opportunityModes,
+      minLiquidityUsdc: filters.minLiquidityUsdc,
+      minVolume24hUsdc: filters.minVolume24hUsdc,
+      maxSpreadCents: filters.maxSpreadCents,
+      minTradabilityScore: filters.minTradabilityScore,
+      minResearchPriorityScore: filters.minResearchPriorityScore,
+      maxResolutionAmbiguityScore: filters.maxResolutionAmbiguityScore,
+      includeTags: filters.includeTags,
+      excludeTags: filters.excludeTags,
+      search: filters.search,
+      sort: filters.sort,
+      limit: filters.limit,
+      offset: filters.offset
+    });
+    if (!result.runId) {
+      throw new Error("No persisted universe run found. Call ingest_market_universe first.");
+    }
+    return textResult({
+      run_id: result.runId,
+      latest_run: store.getUniverseRun(result.runId),
+      total: result.total,
+      filters,
+      markets: result.markets.map(formatUniverseMarketRecord)
+    });
+  }
+);
+
+server.registerTool(
+  "get_universe_facets",
+  {
+    description: toolDescription("get_universe_facets"),
+    inputSchema: {
+      run_id: z.string().optional()
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const facets = currentStateStore(config).getUniverseFacets(input.run_id);
+    return textResult(facets);
+  }
+);
+
+server.registerTool(
+  "get_universe_event_clusters",
+  {
+    description: toolDescription("get_universe_event_clusters"),
+    inputSchema: {
+      run_id: z.string().optional(),
+      profile: z.enum(["outsider-convexity", "large-event"]).default("outsider-convexity"),
+      category_groups: z.array(z.string()).max(10).optional(),
+      search: z.string().max(200).optional(),
+      min_market_count: z.number().int().min(2).max(500).optional(),
+      min_outsider_count: z.number().int().min(0).max(200).optional(),
+      min_cluster_liquidity_usdc: z.number().min(0).optional(),
+      min_outsider_liquidity_usdc: z.number().min(0).optional(),
+      min_outsider_price: z.number().min(0).max(0.5).optional(),
+      max_outsider_price: z.number().min(0.01).max(0.5).optional(),
+      max_outsider_spread_cents: z.number().min(0).max(100).optional(),
+      sort: z.enum(["outsider_convexity_desc", "market_count_desc", "liquidity_desc"]).default("outsider_convexity_desc"),
+      limit: z.number().int().min(1).max(100).default(25),
+      markets_per_cluster: z.number().int().min(1).max(50).default(8)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const result = store.listUniverseEventClusters({
+      runId: input.run_id,
+      profile: input.profile,
+      categoryGroups: input.category_groups,
+      search: input.search,
+      minMarketCount: input.min_market_count,
+      minOutsiderCount: input.min_outsider_count,
+      minClusterLiquidityUsdc: input.min_cluster_liquidity_usdc,
+      minOutsiderLiquidityUsdc: input.min_outsider_liquidity_usdc,
+      minOutsiderPrice: input.min_outsider_price,
+      maxOutsiderPrice: input.max_outsider_price,
+      maxOutsiderSpreadCents: input.max_outsider_spread_cents,
+      sort: input.sort,
+      limit: input.limit,
+      marketsPerCluster: input.markets_per_cluster
+    });
+    if (!result.runId) {
+      throw new Error("No persisted universe run found. Call ingest_market_universe first.");
+    }
+    return textResult({
+      run_id: result.runId,
+      latest_run: store.getUniverseRun(result.runId),
+      profile: input.profile,
+      total: result.total,
+      filters: input,
+      clusters: result.clusters.map(formatUniverseClusterRecord)
+    });
+  }
+);
+
+server.registerTool(
+  "get_bet_candidates",
+  {
+    description: toolDescription("get_bet_candidates"),
+    inputSchema: {
+      profile: z.enum([
+        "clean-short-term",
+        "liquid-politics",
+        "macro-catalyst",
+        "market-making",
+        "longshot-research",
+        "resolution-watch",
+        "cross-market"
+      ]),
+      run_id: z.string().optional(),
+      limit: z.number().int().min(1).max(100).default(25),
+      ensure_fresh: z.boolean().default(false),
+      max_age_minutes: z.number().int().min(1).max(10080).default(1440)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const policies = await discoveryPoliciesForConfig(config);
+    const store = currentStateStore(config);
+    let runId = input.run_id ?? (store.getLatestUniverseRun()?.runId as string | undefined);
+    const latestRun = runId ? store.getUniverseRun(runId) : store.getLatestUniverseRun();
+    if (
+      input.ensure_fresh &&
+      (!latestRun || ((latestUniverseRunAgeMinutes(latestRun) ?? Number.POSITIVE_INFINITY) > input.max_age_minutes))
+    ) {
+      const ingested = await ingestAndPersistUniverseRun({
+        active_only: true,
+        include_closed: false,
+        source: policies.defaults.source,
+        page_size: policies.defaults.pageSize,
+        min_liquidity_usdc: policies.defaults.minLiquidityUsdc,
+        include_tags: policies.defaults.includeTags,
+        order: policies.defaults.order,
+        ascending: policies.defaults.ascending,
+        enrich_top_n: 0,
+        enrichment_profile: "none"
+      }, config);
+      runId = String(ingested.run_id);
+    }
+
+    if (!runId) {
+      throw new Error("No persisted universe run found. Call ingest_market_universe first.");
+    }
+
+    const filters = applyUniverseViewDefaults(
+      {
+        ...filtersForCandidateProfile(input.profile as CandidateProfile, policies),
+        runId,
+        limit: input.limit
+      },
+      policies
+    );
+    const result = store.listUniverseMarkets({
+      runId: filters.runId,
+      view: filters.view,
+      categoryGroups: filters.categoryGroups,
+      structuralTypes: filters.structuralTypes,
+      horizonBuckets: filters.horizonBuckets,
+      priceBuckets: filters.priceBuckets,
+      opportunityModes: filters.opportunityModes,
+      minLiquidityUsdc: filters.minLiquidityUsdc,
+      minVolume24hUsdc: filters.minVolume24hUsdc,
+      maxSpreadCents: filters.maxSpreadCents,
+      minTradabilityScore: filters.minTradabilityScore,
+      minResearchPriorityScore: filters.minResearchPriorityScore,
+      maxResolutionAmbiguityScore: filters.maxResolutionAmbiguityScore,
+      includeTags: filters.includeTags,
+      excludeTags: filters.excludeTags,
+      search: filters.search,
+      sort: filters.sort,
+      limit: filters.limit,
+      offset: filters.offset
+    });
+
+    const markets = result.markets.map(formatUniverseMarketRecord);
+    return textResult({
+      profile: input.profile,
+      run_id: result.runId,
+      total: result.total,
+      filters,
+      handoff_recommendation: markets[0]?.recommended_next_skill,
+      markets
+    });
+  }
+);
+
+server.registerTool(
+  "enrich_universe_markets",
+  {
+    description: toolDescription("enrich_universe_markets"),
+    inputSchema: {
+      run_id: z.string().optional(),
+      market_keys: z.array(z.string()).max(100).optional(),
+      view: z.enum([
+        "best_research_candidates",
+        "clean_catalyst_bets",
+        "execution_ready",
+        "market_making_candidates",
+        "cross_market_dislocations",
+        "resolution_watch",
+        "low_attention_modelable",
+        "avoid_or_blocked"
+      ]).optional(),
+      top_n: z.number().int().min(1).max(500).default(100),
+      enrichment_profile: z.enum(["microstructure", "microstructure_and_history"]).default("microstructure")
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const policies = await discoveryPoliciesForConfig(config);
+    const store = currentStateStore(config);
+    const runId = input.run_id ?? (store.getLatestUniverseRun()?.runId as string | undefined);
+    if (!runId) {
+      throw new Error("No persisted universe run found. Call ingest_market_universe first.");
+    }
+
+    let selected = input.market_keys?.map((marketKey) => store.getUniverseMarket(runId, marketKey)).filter(Boolean) as Record<string, unknown>[] | undefined;
+    if (!selected || selected.length === 0) {
+      const filters = applyUniverseViewDefaults({
+        runId,
+        view: input.view,
+        limit: input.top_n
+      }, policies);
+      selected = store.listUniverseMarkets({
+        runId: filters.runId,
+        view: filters.view,
+        categoryGroups: filters.categoryGroups,
+        structuralTypes: filters.structuralTypes,
+        horizonBuckets: filters.horizonBuckets,
+        priceBuckets: filters.priceBuckets,
+        opportunityModes: filters.opportunityModes,
+        minLiquidityUsdc: filters.minLiquidityUsdc,
+        minVolume24hUsdc: filters.minVolume24hUsdc,
+        maxSpreadCents: filters.maxSpreadCents,
+        minTradabilityScore: filters.minTradabilityScore,
+        minResearchPriorityScore: filters.minResearchPriorityScore,
+        maxResolutionAmbiguityScore: filters.maxResolutionAmbiguityScore,
+        includeTags: filters.includeTags,
+        excludeTags: filters.excludeTags,
+        search: filters.search,
+        sort: filters.sort,
+        limit: input.top_n,
+        offset: 0
+      }).markets;
+    }
+
+    const markets = selected.map(universeMarketFromStoredRecord);
+    const enriched = await enrichUniverseMarkets(config, markets, {
+      topN: input.market_keys?.length ?? input.top_n,
+      profile: input.enrichment_profile
+    });
+    const capturedAt = new Date().toISOString();
+    store.recordUniverseMarkets(
+      runId,
+      enriched.markets.map((market) => universeMarketToStoredInput(runId, market, capturedAt))
+    );
+    return textResult({
+      run_id: runId,
+      requested_count: markets.length,
+      enriched_count: enriched.enrichedCount,
+      markets: enriched.markets.map((market) =>
+        formatUniverseMarketRecord(normalizeUniverseMarketForStorage(market) as Record<string, unknown>)
+      )
+    });
+  }
+);
+
+server.registerTool(
+  "promote_universe_markets_to_watchlist",
+  {
+    description: toolDescription("promote_universe_markets_to_watchlist"),
+    inputSchema: {
+      run_id: z.string().optional(),
+      market_keys: z.array(z.string()).min(1).max(100),
+      watchlist_name: z.string().min(1).max(120),
+      replace_existing_group: z.boolean().default(false),
+      move_threshold_pct_points: z.number().min(0).default(3),
+      spread_threshold_cents: z.number().min(0).default(5),
+      include_related_markets: z.boolean().default(true),
+      include_comments: z.boolean().default(true),
+      scope: z.enum(["watchlist", "portfolio", "all"]).default("watchlist")
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const runId = input.run_id ?? (store.getLatestUniverseRun()?.runId as string | undefined);
+    if (!runId) {
+      throw new Error("No persisted universe run found. Call ingest_market_universe first.");
+    }
+
+    const selected = input.market_keys
+      .map((marketKey) => store.getUniverseMarket(runId, marketKey))
+      .filter(Boolean) as Record<string, unknown>[];
+
+    const skipped: Array<Record<string, unknown>> = [];
+    const watchlistMarkets: WatchlistMergeMarket[] = [];
+    for (const market of selected) {
+      const slug = firstString(market.slug);
+      const conditionId = firstString(market.conditionId);
+      const marketId = firstString(market.marketId);
+      const tokenId = Array.isArray(market.clobTokenIds) ? String(market.clobTokenIds[0] ?? "") : "";
+      if (slug) {
+        watchlistMarkets.push({ title: String(market.title ?? slug), identifierType: "slug", identifier: slug });
+      } else if (conditionId) {
+        watchlistMarkets.push({ title: String(market.title ?? conditionId), identifierType: "condition_id", identifier: conditionId });
+      } else if (marketId) {
+        watchlistMarkets.push({ title: String(market.title ?? marketId), identifierType: "market_id", identifier: marketId });
+      } else if (tokenId) {
+        watchlistMarkets.push({ title: String(market.title ?? tokenId), identifierType: "token_id", identifier: tokenId });
+      } else {
+        skipped.push({ market_key: market.marketKey, title: market.title, reason: "missing_identifier" });
+      }
+    }
+
+    const watchlistPath = path.resolve(config.cwd, "configs/watchlists.yaml");
+    const currentYaml = await readFile(watchlistPath, "utf8");
+    const merged = mergeMarketsIntoWatchlistsYaml(currentYaml, { markets: watchlistMarkets }, {
+      watchlist_name: input.watchlist_name,
+      replace_existing_group: input.replace_existing_group,
+      move_threshold_pct_points: input.move_threshold_pct_points,
+      spread_threshold_cents: input.spread_threshold_cents,
+      include_related_markets: input.include_related_markets,
+      include_comments: input.include_comments,
+      scope: input.scope,
+      description: "managed from universe discovery"
+    });
+    await writeFile(watchlistPath, merged.yaml, "utf8");
+
+    return textResult({
+      run_id: runId,
+      watchlist_path: watchlistPath,
+      group_name: merged.groupName,
+      added_count: watchlistMarkets.length,
+      skipped,
+      markets: watchlistMarkets
+    }, `Promoted ${watchlistMarkets.length} universe markets into ${merged.groupName} at ${watchlistPath}.`);
   }
 );
 

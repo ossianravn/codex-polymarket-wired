@@ -1,0 +1,72 @@
+version: 1
+
+defaults:
+  page_size: 1000
+  source: markets_keyset
+  include_tags: true
+  active_only: true
+  include_closed: false
+  order: volume_num,liquidity_num
+  ascending: false
+  enrich_top_n: 250
+  enrichment_profile: microstructure
+  min_liquidity_usdc: 0
+
+thresholds:
+  deep_liquidity_usdc: 100000
+  tradable_liquidity_usdc: 10000
+  thin_liquidity_usdc: 1000
+  tight_spread_cents: 1
+  normal_spread_cents: 3
+  wide_spread_cents: 6
+  max_good_resolution_ambiguity_score: 35
+  min_good_tradability_score: 65
+  min_good_research_priority_score: 65
+
+preferences:
+  category_groups:
+    politics: 85
+    economics: 85
+    finance: 80
+    crypto: 75
+    tech: 75
+    sports: 55
+    culture: 50
+    other: 55
+  blocked_tags: []
+  blocked_category_groups: []
+
+profiles:
+  clean-short-term:
+    view: clean_catalyst_bets
+    horizon_buckets: [short-0-7d, near-8-30d]
+    min_tradability_score: 65
+    max_resolution_ambiguity_score: 35
+    sort: research_priority_desc
+  liquid-politics:
+    view: best_research_candidates
+    category_groups: [politics]
+    min_liquidity_usdc: 25000
+    max_spread_cents: 3
+    sort: research_priority_desc
+  macro-catalyst:
+    view: clean_catalyst_bets
+    category_groups: [economics, finance, crypto]
+    horizon_buckets: [short-0-7d, near-8-30d, medium-31-120d]
+    sort: research_priority_desc
+  market-making:
+    view: market_making_candidates
+    min_liquidity_usdc: 10000
+    sort: maker_score_desc
+  longshot-research:
+    view: low_attention_modelable
+    price_buckets: [longshot-0-10c, cheap-10-30c]
+    min_tradability_score: 45
+    sort: attention_gap_desc
+  resolution-watch:
+    view: resolution_watch
+    horizon_buckets: [resolves-today, short-0-7d]
+    sort: ending_soon
+  cross-market:
+    view: cross_market_dislocations
+    sort: research_priority_desc

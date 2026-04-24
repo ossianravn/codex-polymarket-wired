@@ -63,3 +63,15 @@ The MCP server exposes the same state-driven logic through:
 - `get_portfolio_risk_summary`
 
 These tools are intentionally read-only and do not place or cancel orders themselves.
+
+## universe triage boundary
+
+Full-universe discovery is upstream of the strategy engine. The universe layer computes deterministic first-pass facets and heuristic triage scores so a large active market set can be filtered quickly, but those scores are not fair-value estimates and should not be treated as true expected edge.
+
+Use the boundary like this:
+- universe discovery decides which markets deserve classifier or research attention
+- opportunity-classifier refines the shortlist
+- deep-market-research establishes fair value
+- strategy-engine only ranks persisted researched and classified markets
+
+Known limitation: `max_daily_loss_usdc` exists in risk config but is not yet backed by full realized and unrealized PnL enforcement. Keep that as a policy TODO rather than assuming the current engine fully enforces it.
