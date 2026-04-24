@@ -23,6 +23,7 @@ The current schema persists:
 - thesis links between markets and shared narratives
 - portfolio snapshots and per-market positions
 - order previews and submitted orders
+- paper auto-trading sessions and decisions
 - automation and agent run metadata
 
 ## why it exists
@@ -65,6 +66,7 @@ The important persistent layers are:
 - **market_thesis_links** — mapping from market to thesis key and confidence
 - **portfolio_snapshots / portfolio_positions** — persisted venue positions by sync time
 - **previews / orders** — guarded execution lineage
+- **auto_trading_sessions / auto_trading_decisions** — paper autonomous mandates, constraints, proposed allocations, blockers, and next-check timestamps
 
 ## design notes
 
@@ -75,6 +77,7 @@ The important persistent layers are:
 - Watcher alerts still mirror into the JSON cache for compatibility, but SQLite is now the primary local source of truth.
 - Universe discovery uses its own snapshot tables rather than flooding `market_snapshots` for every scanned market.
 - Many-participant event detection is derived from event IDs, event slugs, title patterns, and series fallback fields in `universe_markets`.
+- Auto-trading sessions are paper-only in the current implementation; live order placement remains outside these tables and behind preview/submit tools.
 
 ## universe retention
 

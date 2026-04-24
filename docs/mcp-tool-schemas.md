@@ -26,6 +26,7 @@ The source of truth for exact MCP input schemas in this scaffold is:
 - `get_universe_facets`
 - `get_bet_candidates`
 - `get_universe_event_clusters`
+- `get_auto_trading_session`
 - `enrich_universe_markets`
 
 ### write tools
@@ -34,6 +35,8 @@ The source of truth for exact MCP input schemas in this scaffold is:
 - `record_classification`
 - `record_thesis_link`
 - `promote_universe_markets_to_watchlist`
+- `start_auto_trading_session`
+- `run_auto_trading_iteration`
 - `preview_limit_order`
 - `preview_marketable_order`
 - `submit_previewed_order`
@@ -133,3 +136,34 @@ Example calls:
 `get_universe_event_clusters` groups persisted universe markets by event, event slug, title pattern, or series fallback. Use it for many-participant events such as elections, tournaments, Eurovision, awards, and similar clusters where cheap outsider markets may re-rate sharply after an over-performance.
 
 `promote_universe_markets_to_watchlist` is the only universe write tool, and it only updates `configs/watchlists.yaml`.
+
+## autonomous paper trading tools
+
+The auto-trading tools create and iterate a paper mandate. They persist proposed decisions but do not submit live orders.
+
+```json
+{
+  "tool": "start_auto_trading_session",
+  "args": {
+    "budget_usdc": 50,
+    "timeframe_hours": 72,
+    "risk_profile": "balanced",
+    "mode": "paper",
+    "limit": 10,
+    "compact": true
+  }
+}
+```
+
+```json
+{
+  "tool": "run_auto_trading_iteration",
+  "args": {
+    "session_id": "existing-session-id",
+    "limit": 10,
+    "compact": true
+  }
+}
+```
+
+Use `get_auto_trading_session` to inspect the persisted mandate and recent decisions. Auto-trading tools default to compact output, excluding raw market snapshots from responses while keeping full audit payloads in the local state store.

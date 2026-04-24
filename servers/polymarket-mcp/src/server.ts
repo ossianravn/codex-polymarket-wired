@@ -57,6 +57,7 @@ import {
 import { TOOLS } from "./tool-specs.js";
 import {
   openStateStore,
+  type StoredAutoTradingDecisionRecord,
   type StoredUniverseMarketInput
 } from "../../../packages/state-store/src/index.js";
 import {
@@ -64,6 +65,11 @@ import {
   listStrategyCandidates,
   loadStrategyPolicies
 } from "../../../packages/strategy-engine/src/index.js";
+import {
+  compactAutoTradingIterationResult,
+  runAutoTradingIteration,
+  type AutoTradingRiskProfile
+} from "../../../packages/auto-trader/src/index.js";
 
 const server = new McpServer(
   {
@@ -90,6 +96,31 @@ function textResult(structuredContent: Record<string, unknown>, text?: string) {
       }
     ],
     structuredContent
+  };
+}
+
+function compactStoredAutoTradingDecision(decision: StoredAutoTradingDecisionRecord): Record<string, unknown> {
+  return {
+    decisionId: decision.decisionId,
+    sessionId: decision.sessionId,
+    iterationId: decision.iterationId,
+    marketKey: decision.marketKey,
+    title: decision.title,
+    action: decision.action,
+    status: decision.status,
+    score: decision.score,
+    allocatedBudgetUsdc: decision.allocatedBudgetUsdc,
+    targetPrice: decision.targetPrice,
+    nextCheckAt: decision.nextCheckAt,
+    reasonCodes: decision.reasonCodes,
+    blockers: decision.blockers,
+    payload: {
+      tokenId: decision.payload.tokenId,
+      shares: decision.payload.shares,
+      mode: decision.payload.mode,
+      liveSubmissionEnabled: decision.payload.liveSubmissionEnabled
+    },
+    createdAt: decision.createdAt
   };
 }
 
@@ -1447,6 +1478,116 @@ server.registerTool(
       stateDbPath: config.stateDbPath,
       count: queue.length,
       queue
+    });
+  }
+);
+
+server.registerTool(
+  "start_auto_trading_session",
+  {
+    description: toolDescription("start_auto_trading_session"),
+    inputSchema: {
+      name: z.string().max(120).optional(),
+      budget_usdc: z.number().positive().max(10_000),
+      timeframe_hours: z.number().positive().max(24 * 30),
+      risk_profile: z.enum(["conservative", "balanced", "aggressive"]),
+      mode: z.enum(["paper", "live_guarded", "live_autonomous"]).default("paper"),
+      max_single_order_usdc: z.number().positive().optional(),
+      max_open_positions: z.number().int().min(1).max(50).optional(),
+      max_market_horizon_hours: z.number().positive().optional(),
+      min_liquidity_usdc: z.number().min(0).optional(),
+      max_spread_cents: z.number().positive().optional(),
+      limit: z.number().int().min(1).max(100).default(25),
+      compact: z.boolean().default(true)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const result = runAutoTradingIteration(store, {
+      mandate: {
+        name: input.name,
+        budgetUsdc: input.budget_usdc,
+        timeframeHours: input.timeframe_hours,
+        riskProfile: input.risk_profile as AutoTradingRiskProfile,
+        mode: input.mode,
+        maxSingleOrderUsdc: input.max_single_order_usdc,
+        maxOpenPositions: input.max_open_positions,
+        maxMarketHorizonHours: input.max_market_horizon_hours,
+        minLiquidityUsdc: input.min_liquidity_usdc,
+        maxSpreadCents: input.max_spread_cents
+      },
+      limit: input.limit
+    });
+    store.recordAutomationRun({
+      automationName: "auto-trading-session",
+      status: "completed",
+      projectMode: "local",
+      findingsCount: result.candidates.length,
+      summary: `started auto-trading session ${result.session.sessionId}; proposed ${result.summary.proposedOrders} paper orders`,
+      output: compactAutoTradingIterationResult(result) as unknown as Record<string, unknown>
+    });
+    const response = input.compact ? compactAutoTradingIterationResult(result) : result;
+    return textResult(response as unknown as Record<string, unknown>);
+  }
+);
+
+server.registerTool(
+  "run_auto_trading_iteration",
+  {
+    description: toolDescription("run_auto_trading_iteration"),
+    inputSchema: {
+      session_id: z.string().min(1),
+      limit: z.number().int().min(1).max(100).default(25),
+      compact: z.boolean().default(true)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const result = runAutoTradingIteration(store, {
+      sessionId: input.session_id,
+      limit: input.limit
+    });
+    store.recordAutomationRun({
+      automationName: "auto-trading-iteration",
+      status: "completed",
+      projectMode: "local",
+      findingsCount: result.candidates.length,
+      summary: `auto-trading session ${result.session.sessionId}; proposed ${result.summary.proposedOrders} paper orders`,
+      output: compactAutoTradingIterationResult(result) as unknown as Record<string, unknown>
+    });
+    const response = input.compact ? compactAutoTradingIterationResult(result) : result;
+    return textResult(response as unknown as Record<string, unknown>);
+  }
+);
+
+server.registerTool(
+  "get_auto_trading_session",
+  {
+    description: toolDescription("get_auto_trading_session"),
+    inputSchema: {
+      session_id: z.string().min(1),
+      decision_limit: z.number().int().min(1).max(500).default(100),
+      compact: z.boolean().default(true)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const session = store.getAutoTradingSession(input.session_id);
+    if (!session) {
+      throw new Error(`Unknown auto-trading session ${input.session_id}.`);
+    }
+    const decisions = store.listAutoTradingDecisions({
+      sessionId: input.session_id,
+      limit: input.decision_limit
+    });
+    return textResult({
+      stateDbPath: config.stateDbPath,
+      session,
+      decisionCount: decisions.length,
+      decisions: input.compact ? decisions.map(compactStoredAutoTradingDecision) : decisions
     });
   }
 );

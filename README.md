@@ -25,6 +25,8 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
   Shared Polymarket HTTP clients, normalization, preview handling, and runtime config loading.
 - `packages/market-universe/`
   Full-universe ingestion, deterministic first-pass facets and scores, candidate profiles, and selective CLOB enrichment.
+- `packages/auto-trader/`
+  Paper-mode autonomous trading sessions that convert budget, timeframe, and risk profile into persisted candidate decisions.
 - `packages/policy-engine/`
   Risk-limit and execution-policy checks, including thesis-level caps.
 - `packages/state-store/`
@@ -102,6 +104,18 @@ Universe discovery is read-only. It does not place or preview trades.
 
 `get_universe_event_clusters` is for many-participant setups such as elections, tournaments, Eurovision, awards, and other events with many related markets. Its `outsider-convexity` profile looks for clusters with multiple cheap, tradeable outsider markets that can re-rate sharply if a participant over-performs.
 
+## Autonomous paper trading
+
+Use `autotrader:once` or the MCP auto-trading tools to start a paper trading session from a budget, timeframe, and risk profile. The planner filters the latest persisted universe run by end date, liquidity, spread, ambiguity, and risk posture, then records proposed paper orders plus next-check times in SQLite.
+
+```bash
+npm run autotrader:once -- --budget-usdc 50 --timeframe-hours 72 --risk-profile balanced
+```
+
+Use `--json --compact` for short agent-facing dry-run output.
+
+This is paper-only. It does not call live order submission.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:
@@ -128,6 +142,7 @@ The bundled MCP server currently exposes:
 - `get_universe_facets`
 - `get_bet_candidates`
 - `get_universe_event_clusters`
+- `get_auto_trading_session`
 - `enrich_universe_markets`
 
 ### Write tools
@@ -138,6 +153,8 @@ The bundled MCP server currently exposes:
 - `record_thesis_link`
 - `sync_bookmarked_markets_to_watchlist`
 - `promote_universe_markets_to_watchlist`
+- `start_auto_trading_session`
+- `run_auto_trading_iteration`
 - `preview_limit_order`
 - `preview_marketable_order`
 - `submit_previewed_order`

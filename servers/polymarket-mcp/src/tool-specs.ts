@@ -279,6 +279,63 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "start_auto_trading_session",
+    access: "write",
+    description:
+      "Create an autonomous trading mandate from budget, timeframe, and risk profile, then persist the first paper decision iteration. This plans proposed paper orders only; it does not submit live orders.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: { type: "string", maxLength: 120 },
+        budget_usdc: { type: "number", exclusiveMinimum: 0, maximum: 10000 },
+        timeframe_hours: { type: "number", exclusiveMinimum: 0, maximum: 720 },
+        risk_profile: { type: "string", enum: ["conservative", "balanced", "aggressive"] },
+        mode: { type: "string", enum: ["paper", "live_guarded", "live_autonomous"], default: "paper" },
+        max_single_order_usdc: { type: "number", exclusiveMinimum: 0 },
+        max_open_positions: { type: "integer", minimum: 1, maximum: 50 },
+        max_market_horizon_hours: { type: "number", exclusiveMinimum: 0 },
+        min_liquidity_usdc: { type: "number", minimum: 0 },
+        max_spread_cents: { type: "number", exclusiveMinimum: 0 },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+        compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }
+      },
+      required: ["budget_usdc", "timeframe_hours", "risk_profile"]
+    }
+  },
+  {
+    name: "run_auto_trading_iteration",
+    access: "write",
+    description:
+      "Run another paper planning iteration for an existing autonomous trading session and persist its decisions plus next-check schedule.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        session_id: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+        compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }
+      },
+      required: ["session_id"]
+    }
+  },
+  {
+    name: "get_auto_trading_session",
+    access: "read",
+    description:
+      "Return an autonomous trading session mandate and its latest persisted paper decisions.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        session_id: { type: "string", minLength: 1 },
+        decision_limit: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+        compact: { type: "boolean", default: true, description: "Return compact decisions without raw market payloads." }
+      },
+      required: ["session_id"]
+    }
+  },
+  {
     name: "ingest_market_universe",
     access: "read",
     description:

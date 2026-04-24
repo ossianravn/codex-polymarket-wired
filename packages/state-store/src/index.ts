@@ -187,6 +187,75 @@ export interface StoredAgentRunInput {
   output?: Record<string, unknown>;
 }
 
+export interface StoredAutoTradingSessionInput {
+  sessionId?: string;
+  name?: string;
+  status?: "active" | "paused" | "completed" | "stopped";
+  mode: "paper" | "live_guarded" | "live_autonomous";
+  riskProfile: "conservative" | "balanced" | "aggressive";
+  budgetUsdc: number;
+  timeframeHours: number;
+  startedAt?: string;
+  endsAt?: string;
+  heartbeatMinutes?: number;
+  mandate: Record<string, unknown>;
+  constraints?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StoredAutoTradingSessionRecord {
+  sessionId: string;
+  name?: string;
+  status: string;
+  mode: string;
+  riskProfile: string;
+  budgetUsdc: number;
+  timeframeHours: number;
+  startedAt: string;
+  endsAt: string;
+  heartbeatMinutes?: number;
+  mandate: Record<string, unknown>;
+  constraints: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  updatedAt?: string;
+}
+
+export interface StoredAutoTradingDecisionInput {
+  decisionId?: string;
+  sessionId: string;
+  iterationId: string;
+  marketKey?: string;
+  title?: string;
+  action: string;
+  status: string;
+  score?: number;
+  allocatedBudgetUsdc?: number;
+  targetPrice?: number;
+  nextCheckAt?: string;
+  reasonCodes?: string[];
+  blockers?: string[];
+  payload?: Record<string, unknown>;
+  createdAt?: string;
+}
+
+export interface StoredAutoTradingDecisionRecord {
+  decisionId: string;
+  sessionId: string;
+  iterationId: string;
+  marketKey?: string;
+  title?: string;
+  action: string;
+  status: string;
+  score?: number;
+  allocatedBudgetUsdc?: number;
+  targetPrice?: number;
+  nextCheckAt?: string;
+  reasonCodes: string[];
+  blockers: string[];
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface StoredUniverseRunInput {
   runId?: string;
   startedAt?: string;
@@ -708,6 +777,47 @@ function universeMarketRowToRecord(row: unknown): Record<string, unknown> {
   };
 }
 
+function autoTradingSessionRowToRecord(row: unknown): StoredAutoTradingSessionRecord {
+  const record = rowRecord(row);
+  return {
+    sessionId: String(record.session_id ?? ""),
+    name: typeof record.name === "string" ? record.name : undefined,
+    status: String(record.status ?? "active"),
+    mode: String(record.mode ?? "paper"),
+    riskProfile: String(record.risk_profile ?? "balanced"),
+    budgetUsdc: asNumber(record.budget_usdc) ?? 0,
+    timeframeHours: asNumber(record.timeframe_hours) ?? 0,
+    startedAt: String(record.started_at ?? ""),
+    endsAt: String(record.ends_at ?? ""),
+    heartbeatMinutes: asNumber(record.heartbeat_minutes),
+    mandate: parseJson<Record<string, unknown>>(record.mandate_json, {}),
+    constraints: parseJson<Record<string, unknown>>(record.constraints_json, {}),
+    metadata: parseJson<Record<string, unknown>>(record.metadata_json, {}),
+    updatedAt: typeof record.updated_at === "string" ? record.updated_at : undefined
+  } satisfies StoredAutoTradingSessionRecord;
+}
+
+function autoTradingDecisionRowToRecord(row: unknown): StoredAutoTradingDecisionRecord {
+  const record = rowRecord(row);
+  return {
+    decisionId: String(record.decision_id ?? ""),
+    sessionId: String(record.session_id ?? ""),
+    iterationId: String(record.iteration_id ?? ""),
+    marketKey: typeof record.market_key === "string" ? record.market_key : undefined,
+    title: typeof record.title === "string" ? record.title : undefined,
+    action: String(record.action ?? ""),
+    status: String(record.status ?? ""),
+    score: asNumber(record.score),
+    allocatedBudgetUsdc: asNumber(record.allocated_budget_usdc),
+    targetPrice: asNumber(record.target_price),
+    nextCheckAt: typeof record.next_check_at === "string" ? record.next_check_at : undefined,
+    reasonCodes: parseJson<string[]>(record.reason_codes_json, []),
+    blockers: parseJson<string[]>(record.blockers_json, []),
+    payload: parseJson<Record<string, unknown>>(record.payload_json, {}),
+    createdAt: String(record.created_at ?? "")
+  } satisfies StoredAutoTradingDecisionRecord;
+}
+
 const UNIVERSE_SORT_SQL: Record<string, string> = {
   research_priority_desc: "research_priority_score DESC, tradability_score DESC, liquidity_usd DESC",
   trade_opportunity_desc: "trade_opportunity_score DESC, tradability_score DESC",
@@ -1188,6 +1298,45 @@ export class StateStore {
       );
       CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);
       CREATE INDEX IF NOT EXISTS idx_agent_runs_market_time ON agent_runs(market_key, started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS auto_trading_sessions (
+        session_id TEXT PRIMARY KEY,
+        name TEXT,
+        status TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        risk_profile TEXT NOT NULL,
+        budget_usdc REAL NOT NULL,
+        timeframe_hours REAL NOT NULL,
+        started_at TEXT NOT NULL,
+        ends_at TEXT NOT NULL,
+        heartbeat_minutes REAL,
+        mandate_json TEXT NOT NULL,
+        constraints_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        updated_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_auto_trading_sessions_status_time ON auto_trading_sessions(status, started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS auto_trading_decisions (
+        decision_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        iteration_id TEXT NOT NULL,
+        market_key TEXT,
+        title TEXT,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        score REAL,
+        allocated_budget_usdc REAL,
+        target_price REAL,
+        next_check_at TEXT,
+        reason_codes_json TEXT NOT NULL,
+        blockers_json TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES auto_trading_sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_auto_trading_decisions_session_time ON auto_trading_decisions(session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_auto_trading_decisions_market_time ON auto_trading_decisions(market_key, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2579,6 +2728,141 @@ export class StateStore {
     return runId;
   }
 
+  createAutoTradingSession(input: StoredAutoTradingSessionInput): StoredAutoTradingSessionRecord {
+    const sessionId = input.sessionId ?? randomUUID();
+    const startedAt = input.startedAt ?? nowIso();
+    const endsAt = input.endsAt ?? new Date(Date.parse(startedAt) + input.timeframeHours * 60 * 60 * 1000).toISOString();
+    const updatedAt = nowIso();
+    this.db.prepare(`
+      INSERT OR REPLACE INTO auto_trading_sessions (
+        session_id, name, status, mode, risk_profile, budget_usdc, timeframe_hours,
+        started_at, ends_at, heartbeat_minutes, mandate_json, constraints_json, metadata_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      sessionId,
+      input.name ?? null,
+      input.status ?? "active",
+      input.mode,
+      input.riskProfile,
+      input.budgetUsdc,
+      input.timeframeHours,
+      startedAt,
+      endsAt,
+      input.heartbeatMinutes ?? null,
+      jsonString(input.mandate, {}),
+      jsonString(input.constraints ?? {}, {}),
+      jsonString(input.metadata ?? {}, {}),
+      updatedAt
+    );
+    return this.getAutoTradingSession(sessionId) as StoredAutoTradingSessionRecord;
+  }
+
+  getAutoTradingSession(sessionId: string): StoredAutoTradingSessionRecord | undefined {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM auto_trading_sessions
+      WHERE session_id = ?
+      LIMIT 1
+    `).get(sessionId);
+    return row ? autoTradingSessionRowToRecord(row) : undefined;
+  }
+
+  listAutoTradingSessions(args?: { status?: string; limit?: number }): StoredAutoTradingSessionRecord[] {
+    const where: string[] = [];
+    const params: SqlPrimitive[] = [];
+    if (args?.status) {
+      where.push("status = ?");
+      params.push(args.status);
+    }
+    params.push(Math.max(1, Math.min(100, args?.limit ?? 20)));
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM auto_trading_sessions
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY started_at DESC, session_id DESC
+      LIMIT ?
+    `).all(...params);
+    return rows.map((row) => autoTradingSessionRowToRecord(row));
+  }
+
+  updateAutoTradingSessionStatus(
+    sessionId: string,
+    status: "active" | "paused" | "completed" | "stopped",
+    metadata?: Record<string, unknown>
+  ): void {
+    const existing = this.getAutoTradingSession(sessionId);
+    const mergedMetadata = metadata === undefined
+      ? existing?.metadata ?? {}
+      : { ...(existing?.metadata ?? {}), ...metadata };
+    this.db.prepare(`
+      UPDATE auto_trading_sessions
+      SET status = ?, metadata_json = ?, updated_at = ?
+      WHERE session_id = ?
+    `).run(status, jsonString(mergedMetadata, {}), nowIso(), sessionId);
+  }
+
+  recordAutoTradingDecision(input: StoredAutoTradingDecisionInput): StoredAutoTradingDecisionRecord {
+    const decisionId = input.decisionId ?? randomUUID();
+    const createdAt = input.createdAt ?? nowIso();
+    this.db.prepare(`
+      INSERT OR REPLACE INTO auto_trading_decisions (
+        decision_id, session_id, iteration_id, market_key, title, action, status, score,
+        allocated_budget_usdc, target_price, next_check_at, reason_codes_json,
+        blockers_json, payload_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      decisionId,
+      input.sessionId,
+      input.iterationId,
+      input.marketKey ?? null,
+      input.title ?? null,
+      input.action,
+      input.status,
+      input.score ?? null,
+      input.allocatedBudgetUsdc ?? null,
+      input.targetPrice ?? null,
+      input.nextCheckAt ?? null,
+      jsonString(input.reasonCodes ?? [], []),
+      jsonString(input.blockers ?? [], []),
+      jsonString(input.payload ?? {}, {}),
+      createdAt
+    );
+    const row = this.db.prepare(`
+      SELECT *
+      FROM auto_trading_decisions
+      WHERE decision_id = ?
+      LIMIT 1
+    `).get(decisionId);
+    return autoTradingDecisionRowToRecord(row);
+  }
+
+  listAutoTradingDecisions(args: {
+    sessionId: string;
+    iterationId?: string;
+    marketKey?: string;
+    limit?: number;
+  }): StoredAutoTradingDecisionRecord[] {
+    const where = ["session_id = ?"];
+    const params: SqlPrimitive[] = [args.sessionId];
+    if (args.iterationId) {
+      where.push("iteration_id = ?");
+      params.push(args.iterationId);
+    }
+    if (args.marketKey) {
+      where.push("market_key = ?");
+      params.push(args.marketKey);
+    }
+    params.push(Math.max(1, Math.min(500, args.limit ?? 100)));
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM auto_trading_decisions
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, decision_id DESC
+      LIMIT ?
+    `).all(...params);
+    return rows.map((row) => autoTradingDecisionRowToRecord(row));
+  }
+
   recordThesisLink(input: StoredThesisLinkInput): number {
     const marketKey = this.resolveMarketKey(input);
     const createdAt = input.createdAt ?? nowIso();
@@ -3044,7 +3328,9 @@ export class StateStore {
       portfolioSnapshots: this.preparedCount("portfolio_snapshots"),
       portfolioPositions: this.preparedCount("portfolio_positions"),
       automationRuns: this.preparedCount("automation_runs"),
-      agentRuns: this.preparedCount("agent_runs")
+      agentRuns: this.preparedCount("agent_runs"),
+      autoTradingSessions: this.preparedCount("auto_trading_sessions"),
+      autoTradingDecisions: this.preparedCount("auto_trading_decisions")
     } satisfies Record<string, number>;
 
     const recentResearchRuns = this.db.prepare(`

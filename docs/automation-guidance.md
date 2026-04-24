@@ -5,6 +5,7 @@
 Good automation tasks:
 - watchlist scans
 - universe discovery and candidate triage
+- paper-mode autonomous trading iterations
 - opportunity triage
 - catalyst drift checks
 - resolution watch
@@ -17,6 +18,8 @@ Avoid in the Codex app:
 - quote maintenance
 - continuous websocket processing
 - unattended entry/exit logic that opens positions
+
+Paper-mode auto-trader iterations are allowed because they persist proposed decisions and schedules without submitting live orders.
 
 ## recommended stance
 

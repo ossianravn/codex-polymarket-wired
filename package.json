@@ -21,7 +21,8 @@
     "executor:once": "tsx ./services/executor-daemon/src/index.ts --once",
     "state:summary": "tsx ./scripts/state-summary.ts",
     "state:queue": "tsx ./scripts/execution-queue.ts",
-    "universe:once": "tsx ./scripts/universe-discovery.ts"
+    "universe:once": "tsx ./scripts/universe-discovery.ts",
+    "autotrader:once": "tsx ./scripts/autotrader-iteration.ts"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

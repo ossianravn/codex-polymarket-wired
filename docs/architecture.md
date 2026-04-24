@@ -23,6 +23,11 @@ Use four lanes:
    - guarded previews and explicit submits happen only after the user or a downstream skill has already narrowed the candidate set
    - keep preview-before-submit as the default posture
 
+5. **autonomous paper lane**
+   - a session mandate converts user budget, timeframe, and risk profile into persisted constraints
+   - the auto-trader planner filters the latest universe run, proposes paper orders, and records per-market next-check times
+   - this lane does not submit live orders; it is the proving ground before live guarded autonomy
+
 ## recommended skill stack
 
 ```txt
@@ -87,3 +92,7 @@ Handle:
 - no direct background order entry in Codex app automations
 - real-time execution is a separate service
 - execution enable flag defaults off
+
+## autonomous trading boundary
+
+The current autonomous trader is intentionally paper-only. It can create sessions, persist decisions, allocate paper budget, and schedule follow-ups, but live order submission remains behind explicit preview and submit tools.
