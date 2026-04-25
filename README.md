@@ -26,7 +26,7 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
 - `packages/market-universe/`
   Full-universe ingestion, deterministic first-pass facets and scores, candidate profiles, and selective CLOB enrichment.
 - `packages/auto-trader/`
-  Paper-mode autonomous trading sessions that convert budget, timeframe, and risk profile into persisted decisions, fills, marked paper positions, exits, and realized paper PnL.
+  Autonomous trading sessions that convert budget, timeframe, and risk profile into persisted paper/live decisions, fills, marked paper positions, exits, realized paper PnL, and mode-aware live execution gates.
 - `packages/policy-engine/`
   Risk-limit and execution-policy checks, including thesis-level caps.
 - `packages/state-store/`
@@ -106,7 +106,7 @@ Universe discovery is read-only. It does not place or preview trades.
 
 ## Autonomous paper trading
 
-Use `autotrader:once` or the MCP auto-trading tools to start a paper trading session from a budget, timeframe, and risk profile. The planner filters the latest persisted universe run by end date, liquidity, spread, ambiguity, and risk posture, then records proposed paper orders, idempotent paper fills, marked paper positions, exit decisions, realized paper PnL, and next-check times in SQLite.
+Use `autotrader:once` or the MCP auto-trading tools to start a trading session from a budget, timeframe, and risk profile. The planner filters the latest persisted universe run by end date, liquidity, spread, ambiguity, and risk posture, then records proposed actions, idempotent paper fills in paper mode, marked paper positions, exit decisions, realized paper PnL, and next-check times in SQLite.
 
 ```bash
 npm run autotrader:once -- --budget-usdc 50 --timeframe-hours 72 --risk-profile balanced
@@ -127,6 +127,12 @@ node --import tsx ./scripts/autotrader-simulation.ts --budget-usdc 50 --timefram
 ```
 
 This is paper-only. It does not call live order submission.
+
+For live modes, decisions become mode-aware:
+
+- `live_guarded` emits live decisions that can be converted into guarded previews, but the execution gate reports that explicit approval is required after preview.
+- `live_autonomous` emits live decisions that are eligible for autonomous submission only after the standard preview and policy checks pass.
+- `paper` decisions are blocked from live execution by the execution gate.
 
 ## MCP Tool Surface
 
@@ -155,6 +161,7 @@ The bundled MCP server currently exposes:
 - `get_bet_candidates`
 - `get_universe_event_clusters`
 - `get_auto_trading_session`
+- `get_auto_trading_execution_gate`
 - `enrich_universe_markets`
 
 ### Write tools

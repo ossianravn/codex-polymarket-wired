@@ -10,7 +10,14 @@ import type {
 
 export type AutoTradingRiskProfile = "conservative" | "balanced" | "aggressive";
 export type AutoTradingMode = "paper" | "live_guarded" | "live_autonomous";
-export type AutoTradingAction = "paper_buy_yes" | "paper_sell_yes" | "research_required" | "monitor" | "skip";
+export type AutoTradingAction =
+  | "paper_buy_yes"
+  | "paper_sell_yes"
+  | "live_buy_yes"
+  | "live_sell_yes"
+  | "research_required"
+  | "monitor"
+  | "skip";
 
 export interface AutoTradingMandateInput {
   name?: string;
@@ -96,6 +103,31 @@ export interface AutoTradingIterationResult {
   decisions: StoredAutoTradingDecisionRecord[];
   ledger: StoredPaperTradingLedger;
   candidates: AutoTradingDecision[];
+}
+
+export interface AutoTradingExecutionPreviewRequest {
+  sessionId: string;
+  decisionId: string;
+  mode: AutoTradingMode;
+  action: AutoTradingAction;
+  tokenId: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  orderType: "GTC";
+  postOnly: boolean;
+  clientOrderId: string;
+  notionalUsdc: number;
+}
+
+export interface AutoTradingExecutionGate {
+  decisionId: string;
+  mode: AutoTradingMode;
+  canPreview: boolean;
+  canSubmitAutonomously: boolean;
+  requiresApproval: boolean;
+  blockers: string[];
+  previewRequest?: AutoTradingExecutionPreviewRequest;
 }
 
 export interface CompactAutoTradingDecision {
@@ -360,6 +392,32 @@ function clampProbability(value: number): number {
   return Math.max(0.001, Math.min(0.999, Number(value.toFixed(4))));
 }
 
+function entryActionForMode(mode: AutoTradingMode): AutoTradingAction {
+  return mode === "paper" ? "paper_buy_yes" : "live_buy_yes";
+}
+
+function exitActionForMode(mode: AutoTradingMode): AutoTradingAction {
+  return mode === "paper" ? "paper_sell_yes" : "live_sell_yes";
+}
+
+function isEntryAction(action: AutoTradingAction): boolean {
+  return action === "paper_buy_yes" || action === "live_buy_yes";
+}
+
+function isExitAction(action: AutoTradingAction): boolean {
+  return action === "paper_sell_yes" || action === "live_sell_yes";
+}
+
+function actionSide(action: AutoTradingAction): "BUY" | "SELL" | undefined {
+  if (isEntryAction(action)) {
+    return "BUY";
+  }
+  if (isExitAction(action)) {
+    return "SELL";
+  }
+  return undefined;
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
@@ -555,7 +613,7 @@ function scoreMarket(market: Record<string, unknown>, mandate: AutoTradingMandat
 
 function nextCheckForDecision(decision: AutoTradingDecision, mandate: AutoTradingMandate, now: Date): string {
   const hoursToEnd = hoursBetween(now, decision.market.endDate);
-  const baseMinutes = decision.action === "paper_buy_yes" || decision.action === "paper_sell_yes"
+  const baseMinutes = isEntryAction(decision.action) || isExitAction(decision.action)
     ? Math.max(5, Math.floor(mandate.heartbeatMinutes / 2))
     : mandate.heartbeatMinutes;
   if (hoursToEnd !== undefined && hoursToEnd < 6) {
@@ -640,7 +698,7 @@ function buildPaperExitDecisions(
       const decision = {
         marketKey: position.marketKey,
         title: position.title,
-        action: shouldExit ? "paper_sell_yes" : "monitor",
+        action: shouldExit ? exitActionForMode(mandate.mode) : "monitor",
         status: shouldExit ? "proposed" : "watch",
         score: shouldExit ? 100 : 0,
         allocatedBudgetUsdc: shouldExit ? roundMoney(currentValueUsdc as number) : undefined,
@@ -656,7 +714,7 @@ function buildPaperExitDecisions(
         nextCheckAt: nextCheckForDecision(decision, mandate, now)
       };
     })
-    .filter((decision) => decision.action === "paper_sell_yes");
+    .filter((decision) => isExitAction(decision.action));
 }
 
 function marketIdentity(market: Record<string, unknown>): string {
@@ -802,6 +860,70 @@ export function compactAutoTradingIterationResult(
       heartbeatMinutes: result.mandate.heartbeatMinutes
     },
     candidates: result.candidates.map(compactAutoTradingDecision)
+  };
+}
+
+export function buildAutoTradingExecutionGate(
+  session: StoredAutoTradingSessionRecord,
+  decision: StoredAutoTradingDecisionRecord
+): AutoTradingExecutionGate {
+  const mode = session.mode as AutoTradingMode;
+  const action = decision.action as AutoTradingAction;
+  const blockers: string[] = [];
+  const side = actionSide(action);
+  const tokenId = typeof decision.payload.tokenId === "string" ? decision.payload.tokenId : undefined;
+  const shares = asNumber(decision.payload.shares);
+  const price = decision.targetPrice;
+
+  if (mode === "paper") {
+    blockers.push("paper_session_no_live_execution");
+  }
+  if (!side) {
+    blockers.push("decision_not_executable");
+  }
+  if (decision.status !== "proposed") {
+    blockers.push("decision_not_proposed");
+  }
+  if (!tokenId) {
+    blockers.push("missing_token_id");
+  }
+  if (price === undefined || price <= 0 || price > 1) {
+    blockers.push("missing_or_invalid_price");
+  }
+  if (shares === undefined || shares <= 0) {
+    blockers.push("missing_or_invalid_shares");
+  }
+  if (decision.blockers.length > 0) {
+    blockers.push("decision_has_blockers");
+  }
+
+  const uniqueBlockers = Array.from(new Set(blockers));
+  const canPreview = uniqueBlockers.length === 0;
+  const previewRequest = canPreview
+    ? {
+      sessionId: session.sessionId,
+      decisionId: decision.decisionId,
+      mode,
+      action,
+      tokenId: tokenId as string,
+      side: side as "BUY" | "SELL",
+      price: price as number,
+      size: shares as number,
+      orderType: "GTC" as const,
+      postOnly: true,
+      clientOrderId: `autotrader:${session.sessionId}:${decision.decisionId}`.slice(0, 128),
+      notionalUsdc: roundMoney((price as number) * (shares as number))
+    }
+    : undefined;
+
+  return {
+    decisionId: decision.decisionId,
+    mode,
+    canPreview,
+    canSubmitAutonomously: canPreview && mode === "live_autonomous",
+    requiresApproval: canPreview && mode === "live_guarded",
+    blockers: uniqueBlockers,
+    previewRequest
   };
 }
 
@@ -959,7 +1081,7 @@ export function runAutoTradingIteration(
           status = "watch";
           blockers.push("event_exposure_cap_reached");
         } else {
-          action = "paper_buy_yes";
+          action = entryActionForMode(mandate.mode);
           status = "proposed";
           const remainingEventBudget = Math.max(0, mandate.maxEventExposureUsdc - (eventExposureUsdc.get(eventKey) ?? 0));
           allocatedBudgetUsdc = Math.min(mandate.maxSingleOrderUsdc, remainingBudget, remainingEventBudget);
@@ -1011,10 +1133,10 @@ export function runAutoTradingIteration(
   const allowedNewBuys = Math.max(0, mandate.maxOpenPositions - openPositionsAfterExits);
   let proposedBuyCount = 0;
   const cappedDecisions = [...exitDecisions, ...decisions].map((decision) => {
-    if (decision.action === "paper_buy_yes") {
+    if (isEntryAction(decision.action)) {
       proposedBuyCount += 1;
     }
-    if (decision.action === "paper_buy_yes" && proposedBuyCount > allowedNewBuys) {
+    if (isEntryAction(decision.action) && proposedBuyCount > allowedNewBuys) {
       return {
         ...decision,
         action: "monitor" as const,
@@ -1109,7 +1231,7 @@ export function runAutoTradingIteration(
   }
 
   const proposedBudgetUsdc = cappedDecisions
-    .filter((decision) => decision.action === "paper_buy_yes")
+    .filter((decision) => isEntryAction(decision.action))
     .reduce((sum, decision) => sum + (decision.allocatedBudgetUsdc ?? 0), 0);
   const nextRunAt = cappedDecisions
     .map((decision) => decision.nextCheckAt)
@@ -1137,8 +1259,8 @@ export function runAutoTradingIteration(
       proposedBudgetUsdc: Number(proposedBudgetUsdc.toFixed(4)),
       remainingBudgetUsdc: ledger.summary.remainingBudgetUsdc,
       eligibleMarkets: cappedDecisions.filter((decision) => decision.status !== "blocked").length,
-      proposedOrders: cappedDecisions.filter((decision) => decision.action === "paper_buy_yes").length,
-      exitOrders: cappedDecisions.filter((decision) => decision.action === "paper_sell_yes").length,
+      proposedOrders: cappedDecisions.filter((decision) => isEntryAction(decision.action)).length,
+      exitOrders: cappedDecisions.filter((decision) => isExitAction(decision.action)).length,
       researchRequired: cappedDecisions.filter((decision) => decision.action === "research_required").length,
       blocked: cappedDecisions.filter((decision) => decision.status === "blocked").length,
       riskBlockedNewBuys,

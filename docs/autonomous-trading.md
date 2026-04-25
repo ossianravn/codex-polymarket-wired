@@ -1,6 +1,6 @@
 # autonomous trading
 
-The first autonomous trading implementation is a paper-mode control plane. It turns a user mandate into persisted session state, timeframe-aware candidate filtering, paper fills, marked paper positions, exit decisions, realized paper PnL, and follow-up scheduling.
+The autonomous trading implementation is a mode-aware control plane. It turns a user mandate into persisted session state, timeframe-aware candidate filtering, paper fills, marked paper positions, live decision gates, exit decisions, realized paper PnL, and follow-up scheduling.
 
 It does not submit live orders. Live execution remains gated behind `preview_limit_order`, `preview_marketable_order`, and `submit_previewed_order`.
 
@@ -98,13 +98,24 @@ In this Windows development environment, use the direct `node --import tsx` form
 
 The simulation is deterministic and intentionally conservative as a test harness. It is not a backtest against historical Polymarket order books, and its paper fills assume proposed passive orders get filled at the planner target price.
 
+## live execution modes
+
+The session mode controls execution:
+
+- `paper` records simulated entries/exits and is blocked from live execution.
+- `live_guarded` produces live entry/exit decisions and a preview-ready order request, but requires explicit approval after `preview_limit_order`.
+- `live_autonomous` produces live entry/exit decisions that can submit only after the same guarded preview and policy checks pass.
+
+Use `get_auto_trading_execution_gate` with a session id and decision id to inspect the bridge from a persisted decision into `preview_limit_order` input. The gate returns blockers, whether approval is required, and whether autonomous submission is eligible after preview policy passes.
+
 ## MCP tools
 
 - `start_auto_trading_session`
 - `run_auto_trading_iteration`
 - `get_auto_trading_session`
+- `get_auto_trading_execution_gate`
 
-These tools persist session, decision, paper-fill, and paper-position records. They return compact decision payloads by default so autonomous agents do not ingest raw market snapshots unless explicitly requested with `compact: false`. They are safe for paper experimentation because they do not call live order submission.
+These tools persist session, decision, paper-fill, and paper-position records. They return compact decision payloads by default so autonomous agents do not ingest raw market snapshots unless explicitly requested with `compact: false`. Paper experimentation remains safe because paper mode does not call live order submission.
 
 ## live execution boundary
 

@@ -67,6 +67,7 @@ import {
   loadStrategyPolicies
 } from "../../../packages/strategy-engine/src/index.js";
 import {
+  buildAutoTradingExecutionGate,
   compactAutoTradingIterationResult,
   runAutoTradingIteration,
   type AutoTradingRiskProfile
@@ -1867,6 +1868,54 @@ server.registerTool(
       filters,
       handoff_recommendation: markets[0]?.recommended_next_skill,
       markets
+    });
+  }
+);
+
+server.registerTool(
+  "get_auto_trading_execution_gate",
+  {
+    description: toolDescription("get_auto_trading_execution_gate"),
+    inputSchema: {
+      session_id: z.string().min(1),
+      decision_id: z.string().min(1)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const session = store.getAutoTradingSession(input.session_id);
+    if (!session) {
+      throw new Error(`Unknown auto-trading session ${input.session_id}.`);
+    }
+    const decision = store
+      .listAutoTradingDecisions({ sessionId: input.session_id, limit: 500 })
+      .find((candidate) => candidate.decisionId === input.decision_id);
+    if (!decision) {
+      throw new Error(`Unknown auto-trading decision ${input.decision_id} for session ${input.session_id}.`);
+    }
+    const gate = buildAutoTradingExecutionGate(session, decision);
+    const previewLimitOrderInput = gate.previewRequest
+      ? {
+        token_id: gate.previewRequest.tokenId,
+        side: gate.previewRequest.side,
+        price: gate.previewRequest.price,
+        size: gate.previewRequest.size,
+        order_type: gate.previewRequest.orderType,
+        post_only: gate.previewRequest.postOnly,
+        client_order_id: gate.previewRequest.clientOrderId
+      }
+      : undefined;
+    return textResult({
+      session,
+      decision: compactStoredAutoTradingDecision(decision),
+      gate,
+      previewLimitOrderInput,
+      submissionPolicy: gate.canSubmitAutonomously
+        ? "live_autonomous_may_submit_after_preview_policy_passes"
+        : gate.requiresApproval
+          ? "live_guarded_requires_explicit_approval_after_preview"
+          : "not_submittable"
     });
   }
 );

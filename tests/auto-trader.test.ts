@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { compactAutoTradingIterationResult, runAutoTradingIteration } from "../packages/auto-trader/src/index.js";
+import {
+  buildAutoTradingExecutionGate,
+  compactAutoTradingIterationResult,
+  runAutoTradingIteration
+} from "../packages/auto-trader/src/index.js";
 import { openStateStore } from "../packages/state-store/src/index.js";
 
 async function withTempStore(
@@ -464,6 +468,170 @@ test("auto-trader blocks new paper buys after session stop loss", async () => {
     assert.equal(second.summary.proposedOrders, 0);
     assert.ok(second.candidates.find((candidate) => candidate.marketKey === "condition:fresh")?.blockers.includes("session_stop_loss_reached"));
     assert.ok(second.summary.unrealizedPnlUsdc < -1);
+  });
+});
+
+test("auto-trader uses live actions and gates live guarded previews behind approval", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:live-guarded",
+      conditionId: "live-guarded",
+      slug: "live-guarded",
+      eventSlug: "live-guarded-event",
+      eventTitle: "Live guarded event",
+      title: "Live guarded market",
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.42, 0.58],
+      clobTokenIds: ["live-yes", "live-no"],
+      yesTokenId: "live-yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 10),
+      liquidityUsd: 50_000,
+      volume24hUsd: 20_000,
+      impliedProb: 0.42,
+      bestBid: 0.42,
+      bestAsk: 0.44,
+      midpoint: 0.43,
+      spreadCents: 2,
+      categoryGroup: "crypto",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "execution-ready",
+      modelabilityScore: 80,
+      tradabilityScore: 86,
+      catalystScore: 88,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 86,
+      tradeOpportunityScore: 94,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: {}
+    }]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 20,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "live_guarded",
+        maxSingleOrderUsdc: 5,
+        maxEventExposureUsdc: 5
+      }
+    });
+
+    assert.equal(result.summary.proposedOrders, 1);
+    assert.equal(result.candidates[0]?.action, "live_buy_yes");
+    assert.equal(result.ledger.fills.length, 0);
+    const decision = store.listAutoTradingDecisions({ sessionId: result.session.sessionId, limit: 1 })[0];
+    assert.ok(decision);
+    const gate = buildAutoTradingExecutionGate(result.session, decision);
+    assert.equal(gate.canPreview, true);
+    assert.equal(gate.requiresApproval, true);
+    assert.equal(gate.canSubmitAutonomously, false);
+    assert.equal(gate.previewRequest?.side, "BUY");
+    assert.equal(gate.previewRequest?.tokenId, "live-yes");
+  });
+});
+
+test("auto-trader allows autonomous gate only for live autonomous sessions", async () => {
+  await withTempStore((store) => {
+    const session = store.createAutoTradingSession({
+      sessionId: "session-live-autonomous",
+      mode: "live_autonomous",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      mandate: {
+        mode: "live_autonomous",
+        riskProfile: "aggressive",
+        budgetUsdc: 30,
+        timeframeHours: 24
+      }
+    });
+    const decision = store.recordAutoTradingDecision({
+      sessionId: session.sessionId,
+      iterationId: "iteration-1",
+      marketKey: "condition:auto",
+      title: "Autonomous market",
+      action: "live_sell_yes",
+      status: "proposed",
+      score: 100,
+      allocatedBudgetUsdc: 8,
+      targetPrice: 0.8,
+      payload: {
+        tokenId: "auto-yes",
+        shares: 10
+      }
+    });
+
+    const gate = buildAutoTradingExecutionGate(session, decision);
+    assert.equal(gate.canPreview, true);
+    assert.equal(gate.requiresApproval, false);
+    assert.equal(gate.canSubmitAutonomously, true);
+    assert.equal(gate.previewRequest?.side, "SELL");
+    assert.equal(gate.previewRequest?.size, 10);
+  });
+});
+
+test("auto-trader execution gate blocks paper sessions from live execution", async () => {
+  await withTempStore((store) => {
+    const session = store.createAutoTradingSession({
+      sessionId: "session-paper",
+      mode: "paper",
+      riskProfile: "balanced",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      mandate: {
+        mode: "paper",
+        riskProfile: "balanced",
+        budgetUsdc: 30,
+        timeframeHours: 24
+      }
+    });
+    const decision = store.recordAutoTradingDecision({
+      sessionId: session.sessionId,
+      iterationId: "iteration-1",
+      marketKey: "condition:paper",
+      title: "Paper market",
+      action: "paper_buy_yes",
+      status: "proposed",
+      score: 90,
+      allocatedBudgetUsdc: 5,
+      targetPrice: 0.5,
+      payload: {
+        tokenId: "paper-yes",
+        shares: 10
+      }
+    });
+
+    const gate = buildAutoTradingExecutionGate(session, decision);
+    assert.equal(gate.canPreview, false);
+    assert.equal(gate.canSubmitAutonomously, false);
+    assert.ok(gate.blockers.includes("paper_session_no_live_execution"));
   });
 });
 

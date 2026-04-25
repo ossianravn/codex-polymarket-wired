@@ -340,6 +340,21 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "get_auto_trading_execution_gate",
+    access: "read",
+    description:
+      "Evaluate whether a persisted autonomous trading decision can be converted into a guarded live preview. Paper sessions are blocked, live_guarded requires explicit approval after preview, and live_autonomous can submit only after preview policy passes.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        session_id: { type: "string", minLength: 1 },
+        decision_id: { type: "string", minLength: 1 }
+      },
+      required: ["session_id", "decision_id"]
+    }
+  },
+  {
     name: "ingest_market_universe",
     access: "read",
     description:
