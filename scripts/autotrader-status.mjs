@@ -2,7 +2,7 @@ import process from "node:process";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 
-import { dueStatus } from "./autotrader-scheduler.mjs";
+import { dueStatus, latestSessionObservation } from "./autotrader-scheduler.mjs";
 
 function envString(name, fallback) {
   const value = process.env[name];
@@ -112,32 +112,40 @@ function renderText(status) {
     ].join("\n");
   }
 
-  const latest = status.latest;
+  const latest = latestSessionObservation(status.latest) ?? status.latest;
   const changes = latest.materialChanges?.length ? latest.materialChanges.join(", ") : "none";
   const actionCounts = latest.actionCounts
     ? Object.entries(latest.actionCounts).map(([key, value]) => `${key}:${value}`).join(", ")
     : "unknown";
   const hasBudget = Number.isFinite(latest.budgetUsdc) || Number.isFinite(latest.remainingBudgetUsdc);
+  const openPositionCount = Array.isArray(latest.openPositions)
+    ? latest.openPositions.length
+    : latest.openPositions ?? latest.summary?.openPositions;
   const budgetLine = hasBudget
     ? `Budget: $${(latest.spentUsdc ?? 0).toFixed(4)} spent, $${(latest.remainingBudgetUsdc ?? 0).toFixed(4)} remaining / $${(latest.budgetUsdc ?? 0).toFixed(4)} total`
     : "Budget: unknown";
   const pnlLine = hasBudget
-    ? `Paper PnL: $${(latest.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized, $${(latest.realizedPnlUsdc ?? 0).toFixed(6)} realized, $${(latest.totalPnlUsdc ?? 0).toFixed(6)} total; open positions: ${latest.openPositions ?? "unknown"}`
+    ? `Paper PnL: $${(latest.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized, $${(latest.realizedPnlUsdc ?? 0).toFixed(6)} realized, $${(latest.totalPnlUsdc ?? 0).toFixed(6)} total; open positions: ${openPositionCount ?? "unknown"}`
     : "Paper PnL: unknown";
+  const execution = latest.paperExecutionReport;
+  const executionLine = execution
+    ? `Paper execution: ${execution.orderCount ?? 0} orders; fill rate ${((execution.notionalFillRate ?? 0) * 100).toFixed(2)}%; missed ${execution.missedCount ?? 0}; partial ${execution.partialFillCount ?? 0}; rejected ${execution.rejectedCount ?? 0}`
+    : "Paper execution: unknown";
   return [
-    `Autotrader status: ${latest.noSubmitInvariantHeld ? "safe-no-submit" : "SAFETY VIOLATION"}`,
-    `Generated: ${latest.generatedAt}`,
+    `Autotrader status: ${(status.latest.noSubmitInvariantHeld ?? latest.noSubmitInvariantHeld) ? "safe-no-submit" : "SAFETY VIOLATION"}`,
+    `Generated: ${latest.generatedAt ?? status.latest.generatedAt}`,
     `Session: ${latest.sessionId ?? "unknown"}${latest.startedThisRun ? " (started this run)" : ""}`,
     `Scheduler: ${latest.schedulerSkipped ? `deferred (${latest.schedulerReason ?? "not_due"}, due in ${latest.schedulerDueInSeconds ?? "unknown"}s)` : (latest.schedulerReason ?? "ran")}`,
     `Material changes: ${changes}`,
     `Candidates: ${latest.dryRunCandidates ?? 0} dry-run; previews: ${latest.previewAttempts ?? 0}; submitted: ${latest.submittedOrders ?? 0}`,
     budgetLine,
     pnlLine,
+    executionLine,
     `Paper proposals: ${latest.paperBuyProposalCount ?? 0} buy, ${latest.paperExitProposalCount ?? 0} exit`,
     `Position diagnostics: ${latest.positionDiagnosticCount ?? 0}`,
     `Preview IDs: ${(latest.previewIds ?? []).join(", ") || "none"}`,
     `Actions: ${actionCounts}`,
-    `Next run: ${latest.nextRunAt ?? "unknown"}`,
+    `Next run: ${latest.summary?.nextRunAt ?? latest.nextRunAt ?? "unknown"}`,
     `History records loaded: ${status.history.length}`
   ].join("\n");
 }
@@ -160,6 +168,9 @@ function renderDueStatusText(report) {
     `Safety issue: ${report.safetyIssue ? "yes" : "no"}`,
     `Budget: $${(report.spentUsdc ?? 0).toFixed(4)} spent, $${(report.remainingBudgetUsdc ?? 0).toFixed(4)} remaining`,
     `Open positions: ${report.openPositions ?? "unknown"}; PnL: $${(report.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized, $${(report.realizedPnlUsdc ?? 0).toFixed(6)} realized`,
+    report.paperExecutionReport
+      ? `Paper execution: ${report.paperExecutionReport.orderCount ?? 0} orders; fill rate ${((report.paperExecutionReport.notionalFillRate ?? 0) * 100).toFixed(2)}%; missed ${report.paperExecutionReport.missedCount ?? 0}; partial ${report.paperExecutionReport.partialFillCount ?? 0}; rejected ${report.paperExecutionReport.rejectedCount ?? 0}`
+      : "Paper execution: unknown",
     `Paper proposals: ${report.paperBuyProposalCount ?? 0} buy, ${report.paperExitProposalCount ?? 0} exit`,
     `Position diagnostics: ${report.positionDiagnosticCount ?? 0}`
   ].join("\n");

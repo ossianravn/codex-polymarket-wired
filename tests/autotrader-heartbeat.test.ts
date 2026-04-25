@@ -181,3 +181,46 @@ test("autotrader due status includes latest paper financial summary", () => {
   assert.equal(report.positionDiagnosticCount, 1);
   assert.deepEqual(report.positionDiagnostics, [{ marketKey: "position-1", action: "hold" }]);
 });
+
+test("autotrader due status reads nested daemon observations and execution report", () => {
+  const now = new Date("2026-04-24T12:00:00.000Z");
+  const paperExecutionReport = {
+    orderCount: 3,
+    notionalFillRate: 0.25,
+    missedCount: 2,
+    partialFillCount: 1,
+    rejectedCount: 0
+  };
+  const report = dueStatus(
+    {
+      noSubmitInvariantHeld: true,
+      submittedOrders: 0,
+      observations: [{
+        sessionId: "daemon-session",
+        ran: true,
+        nextRunAt: "2026-04-24T12:10:00.000Z",
+        materialChanges: ["paper_execution_low_fill_rate"],
+        summary: {
+          budgetUsdc: 30,
+          spentUsdc: 12,
+          remainingBudgetUsdc: 18,
+          unrealizedPnlUsdc: -0.5,
+          realizedPnlUsdc: 0.25,
+          totalPnlUsdc: -0.25,
+          openPositions: 2
+        },
+        paperExecutionReport
+      }]
+    },
+    { respectNextRunAt: true, schedulerSlackSeconds: 30 },
+    now
+  );
+
+  assert.equal(report.automationDecision, "notify_material_change");
+  assert.equal(report.sessionId, "daemon-session");
+  assert.equal(report.spentUsdc, 12);
+  assert.equal(report.remainingBudgetUsdc, 18);
+  assert.equal(report.openPositions, 2);
+  assert.deepEqual(report.materialPaperChanges, ["paper_execution_low_fill_rate"]);
+  assert.deepEqual(report.paperExecutionReport, paperExecutionReport);
+});

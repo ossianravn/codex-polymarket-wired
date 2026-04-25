@@ -177,3 +177,64 @@ test("daemon once skips a not-due paper session without MCP or live execution", 
     }
   });
 });
+
+test("daemon once includes paper execution report on run observations", async () => {
+  await withTempDir(async (dir) => {
+    const dbPath = path.join(dir, "state.sqlite");
+    const store = openStateStore(dbPath);
+    store.createAutoTradingSession({
+      sessionId: "daemon-session",
+      name: "daemon run test",
+      status: "active",
+      mode: "paper",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      startedAt: "2026-04-25T12:00:00.000Z",
+      endsAt: "2026-04-26T12:00:00.000Z",
+      heartbeatMinutes: 15,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+    store.close();
+
+    const previousTradingFlag = process.env.POLYMARKET_ENABLE_TRADING;
+    process.env.POLYMARKET_ENABLE_TRADING = "false";
+    try {
+      const options: AutotraderDaemonOptions = {
+        sessionId: "daemon-session",
+        mode: "paper",
+        loop: false,
+        intervalSeconds: 30,
+        respectNextRunAt: true,
+        schedulerSlackSeconds: 30,
+        limit: 5,
+        autoForecast: false,
+        stateDbPath: dbPath,
+        latestReportPath: path.join(dir, "latest.json"),
+        observationLogPath: path.join(dir, "daemon.jsonl"),
+        lockDir: path.join(dir, "daemon.lock"),
+        staleLockSeconds: 60,
+        json: true
+      };
+      const report = await runDaemonOnce(options, new Date("2026-04-25T12:00:00.000Z"));
+      const observations = report.observations as Array<Record<string, unknown>>;
+      const executionReport = observations[0]?.paperExecutionReport as Record<string, unknown> | undefined;
+      assert.equal(report.ok, true);
+      assert.equal(observations[0]?.ran, true);
+      assert.equal(executionReport?.orderCount, 0);
+      assert.equal(executionReport?.notionalFillRate, 0);
+      assert.deepEqual(observations[0]?.materialChanges, []);
+    } finally {
+      if (previousTradingFlag === undefined) {
+        delete process.env.POLYMARKET_ENABLE_TRADING;
+      } else {
+        process.env.POLYMARKET_ENABLE_TRADING = previousTradingFlag;
+      }
+    }
+  });
+});

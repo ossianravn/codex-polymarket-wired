@@ -15,7 +15,8 @@ import {
   openStateStore,
   type StateStore,
   type StoredAutoTradingDecisionRecord,
-  type StoredAutoTradingSessionRecord
+  type StoredAutoTradingSessionRecord,
+  type StoredPaperTradingExecutionReport
 } from "../packages/state-store/src/index.js";
 
 export interface AutotraderDaemonOptions {
@@ -320,6 +321,29 @@ function proposalDetails(decisions: Array<{
     }));
 }
 
+function executionMaterialChanges(report: StoredPaperTradingExecutionReport): string[] {
+  const changes: string[] = [];
+  if (report.orderCount <= 0) {
+    return changes;
+  }
+  if (report.rejectedCount > 0) {
+    changes.push("paper_execution_rejected_orders");
+  }
+  if (report.expiredCount > 0) {
+    changes.push("paper_execution_expired_orders");
+  }
+  if (report.missedCount > 0) {
+    changes.push("paper_execution_missed_orders");
+  }
+  if (report.partialFillCount > 0) {
+    changes.push("paper_execution_partial_fills");
+  }
+  if (report.notionalFillRate < 0.5) {
+    changes.push("paper_execution_low_fill_rate");
+  }
+  return changes;
+}
+
 async function persistDaemonObservation(
   observation: Record<string, unknown>,
   options: AutotraderDaemonOptions
@@ -367,6 +391,11 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
       const paperBuys = proposalDetails(iteration.candidates, "paper_buy_yes");
       const paperExits = proposalDetails(iteration.candidates, "paper_sell_yes");
       const ledger = store.getPaperTradingLedger(session.sessionId);
+      const paperExecutionReport = store.getPaperTradingExecutionReport({
+        sessionId: session.sessionId,
+        limit: 20
+      });
+      const materialChanges = executionMaterialChanges(paperExecutionReport);
       const observation = {
         ...due,
         ran: true,
@@ -375,11 +404,21 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         iterationId: iteration.iterationId,
         forecastWriter,
         summary: compact.summary,
+        budgetUsdc: compact.summary.budgetUsdc,
+        spentUsdc: compact.summary.spentUsdc,
+        remainingBudgetUsdc: compact.summary.remainingBudgetUsdc,
+        positionValueUsdc: compact.summary.positionValueUsdc,
+        unrealizedPnlUsdc: compact.summary.unrealizedPnlUsdc,
+        realizedPnlUsdc: compact.summary.realizedPnlUsdc,
+        totalPnlUsdc: compact.summary.totalPnlUsdc,
+        portfolioValueUsdc: compact.summary.portfolioValueUsdc,
+        materialChanges,
         actionCounts: actionCounts(iteration.candidates),
         paperBuyProposalCount: paperBuys.length,
         paperExitProposalCount: paperExits.length,
         paperBuyProposals: paperBuys,
         paperExitProposals: paperExits,
+        paperExecutionReport,
         openPositions: ledger.positions
           .filter((position) => position.status === "open")
           .map((position) => ({
@@ -459,6 +498,8 @@ function renderText(report: Record<string, unknown>): string {
       `$${Number(summary?.remainingBudgetUsdc ?? 0).toFixed(4)} remaining, ` +
       `${summary?.openPositions ?? 0} open, ` +
       `$${Number(summary?.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized PnL, ` +
+      `${(observation.paperExecutionReport as Record<string, unknown> | undefined)?.orderCount ?? 0} paper orders, ` +
+      `${Number((observation.paperExecutionReport as Record<string, unknown> | undefined)?.notionalFillRate ?? 0).toFixed(4)} fill rate, ` +
       `${observation.paperBuyProposalCount ?? 0} buy proposals, ` +
       `${observation.paperExitProposalCount ?? 0} exit proposals`
     );

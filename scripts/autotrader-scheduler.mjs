@@ -1,5 +1,6 @@
 export function schedulerDecision(previousObservation, options, now = new Date()) {
-  const nextRunAt = previousObservation?.nextRunAt ?? previousObservation?.summary?.nextRunAt;
+  const observation = latestSessionObservation(previousObservation);
+  const nextRunAt = observation?.nextRunAt ?? observation?.summary?.nextRunAt;
   const dueAtMs = typeof nextRunAt === "string" ? Date.parse(nextRunAt) : Number.NaN;
   const nowMs = now.getTime();
   const slackMs = Math.max(0, Number(options.schedulerSlackSeconds ?? 0)) * 1000;
@@ -39,6 +40,7 @@ export function schedulerDecision(previousObservation, options, now = new Date()
 }
 
 export function materialPaperChanges(observation) {
+  observation = latestSessionObservation(observation);
   const ignored = new Set(["heartbeat_deferred_until_next_run"]);
   return (observation?.materialChanges ?? []).filter((change) => !ignored.has(change));
 }
@@ -48,14 +50,16 @@ export function materialChangeFingerprint(changes = []) {
 }
 
 export function dueStatus(previousObservation, options, now = new Date()) {
-  const scheduler = schedulerDecision(previousObservation, options, now);
-  const changes = materialPaperChanges(previousObservation);
+  const observation = latestSessionObservation(previousObservation);
+  const scheduler = schedulerDecision(observation, options, now);
+  const changes = materialPaperChanges(observation);
   const changeFingerprint = materialChangeFingerprint(changes);
   const materialChangesAcknowledged = changes.length === 0 ||
-    previousObservation?.materialChangesAckFingerprint === changeFingerprint;
+    observation?.materialChangesAckFingerprint === changeFingerprint;
   const safetyIssue =
     previousObservation?.noSubmitInvariantHeld === false ||
-    (previousObservation?.submittedOrders ?? 0) > 0;
+    observation?.noSubmitInvariantHeld === false ||
+    (previousObservation?.submittedOrders ?? observation?.submittedOrders ?? 0) > 0;
   const due = !scheduler.skipped;
   const shouldNotify = safetyIssue || !materialChangesAcknowledged;
   const shouldRunHeartbeat = due;
@@ -70,7 +74,7 @@ export function dueStatus(previousObservation, options, now = new Date()) {
   return {
     ok: Boolean(previousObservation),
     generatedAt: now.toISOString(),
-    sessionId: previousObservation?.sessionId,
+    sessionId: observation?.sessionId ?? previousObservation?.sessionId,
     nextRunAt: scheduler.previousNextRunAt,
     scheduler,
     due,
@@ -81,22 +85,30 @@ export function dueStatus(previousObservation, options, now = new Date()) {
     materialChangeFingerprint: changeFingerprint,
     materialChangesAcknowledged,
     safetyIssue,
-    noSubmitInvariantHeld: previousObservation?.noSubmitInvariantHeld,
-    submittedOrders: previousObservation?.submittedOrders ?? 0,
-    budgetUsdc: previousObservation?.budgetUsdc,
-    spentUsdc: previousObservation?.spentUsdc,
-    remainingBudgetUsdc: previousObservation?.remainingBudgetUsdc,
-    positionValueUsdc: previousObservation?.positionValueUsdc,
-    unrealizedPnlUsdc: previousObservation?.unrealizedPnlUsdc,
-    realizedPnlUsdc: previousObservation?.realizedPnlUsdc,
-    totalPnlUsdc: previousObservation?.totalPnlUsdc,
-    portfolioValueUsdc: previousObservation?.portfolioValueUsdc,
-    openPositions: previousObservation?.openPositions,
-    paperBuyProposalCount: previousObservation?.paperBuyProposalCount ?? 0,
-    paperExitProposalCount: previousObservation?.paperExitProposalCount ?? 0,
-    paperBuyProposals: previousObservation?.paperBuyProposals ?? [],
-    paperExitProposals: previousObservation?.paperExitProposals ?? [],
-    positionDiagnosticCount: previousObservation?.positionDiagnosticCount ?? 0,
-    positionDiagnostics: previousObservation?.positionDiagnostics ?? []
+    noSubmitInvariantHeld: previousObservation?.noSubmitInvariantHeld ?? observation?.noSubmitInvariantHeld,
+    submittedOrders: previousObservation?.submittedOrders ?? observation?.submittedOrders ?? 0,
+    budgetUsdc: observation?.budgetUsdc ?? observation?.summary?.budgetUsdc,
+    spentUsdc: observation?.spentUsdc ?? observation?.summary?.spentUsdc,
+    remainingBudgetUsdc: observation?.remainingBudgetUsdc ?? observation?.summary?.remainingBudgetUsdc,
+    positionValueUsdc: observation?.positionValueUsdc ?? observation?.summary?.positionValueUsdc,
+    unrealizedPnlUsdc: observation?.unrealizedPnlUsdc ?? observation?.summary?.unrealizedPnlUsdc,
+    realizedPnlUsdc: observation?.realizedPnlUsdc ?? observation?.summary?.realizedPnlUsdc,
+    totalPnlUsdc: observation?.totalPnlUsdc ?? observation?.summary?.totalPnlUsdc,
+    portfolioValueUsdc: observation?.portfolioValueUsdc ?? observation?.summary?.portfolioValueUsdc,
+    openPositions: observation?.openPositions ?? observation?.summary?.openPositions,
+    paperBuyProposalCount: observation?.paperBuyProposalCount ?? 0,
+    paperExitProposalCount: observation?.paperExitProposalCount ?? 0,
+    paperBuyProposals: observation?.paperBuyProposals ?? [],
+    paperExitProposals: observation?.paperExitProposals ?? [],
+    paperExecutionReport: observation?.paperExecutionReport,
+    positionDiagnosticCount: observation?.positionDiagnosticCount ?? 0,
+    positionDiagnostics: observation?.positionDiagnostics ?? []
   };
+}
+
+export function latestSessionObservation(report) {
+  if (Array.isArray(report?.observations)) {
+    return report.observations.find((observation) => observation?.ran) ?? report.observations[0];
+  }
+  return report;
 }
