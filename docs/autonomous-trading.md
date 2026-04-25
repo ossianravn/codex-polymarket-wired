@@ -116,11 +116,11 @@ Use `execute_auto_trading_decision` to apply the gate:
 
 - `paper` records `blocked` execution state and does not create a live preview.
 - `live_guarded` creates the guarded preview and records `awaiting_approval`.
-- `live_autonomous` creates the guarded preview and submits only when the preview is submit-safe, trading is enabled in both environment and risk config, credentials exist, and the policy hash has not changed.
+- `live_autonomous` creates the guarded preview by default. It submits only when `auto_submit=true`, `live_autonomous_submit_confirmation="CONFIRM_LIVE_AUTONOMOUS_SUBMIT"`, the preview is submit-safe, trading is enabled in both environment and risk config, credentials exist, and the policy hash has not changed.
 
 Each execution attempt updates the decision payload with `execution` and `executionHistory` audit fields.
 
-Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It ignores paper sessions and already-executed decisions, supports `dry_run`, stops at `awaiting_approval` for `live_guarded`, and can submit in `live_autonomous` only after the same checks used by `execute_auto_trading_decision`.
+Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It ignores paper sessions and already-executed decisions, supports `dry_run`, stops at `awaiting_approval` for `live_guarded`, and defaults to preview-only for `live_autonomous`. Autonomous live submission requires both `auto_submit=true` and `live_autonomous_submit_confirmation="CONFIRM_LIVE_AUTONOMOUS_SUBMIT"` before the same checks used by `execute_auto_trading_decision`.
 
 Use `npm run smoke:autotrader-mcp` for an end-to-end no-submit MCP smoke. It starts the server with `POLYMARKET_ENABLE_TRADING=false`, seeds a small composite universe, creates a 24-hour aggressive `live_guarded` session, runs the executor in `dry_run`, then creates one guarded preview with `auto_submit=false` and asserts no order was submitted.
 

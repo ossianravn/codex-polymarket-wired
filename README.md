@@ -131,12 +131,12 @@ This is paper-only. It does not call live order submission.
 For live modes, decisions become mode-aware:
 
 - `live_guarded` emits live decisions that can be converted into guarded previews, but the execution gate reports that explicit approval is required after preview.
-- `live_autonomous` emits live decisions that are eligible for autonomous submission only after the standard preview and policy checks pass.
+- `live_autonomous` emits live decisions that create guarded previews by default. Submission also requires `auto_submit=true`, `live_autonomous_submit_confirmation="CONFIRM_LIVE_AUTONOMOUS_SUBMIT"`, and the standard preview and policy checks.
 - `paper` decisions are blocked from live execution by the execution gate.
 
-Use `execute_auto_trading_decision` to apply that mode behavior to a stored decision. It creates the guarded preview, records execution audit state on the decision, stops at `awaiting_approval` for `live_guarded`, and only submits in `live_autonomous` when preview policy, trading config, and credentials all pass.
+Use `execute_auto_trading_decision` to apply that mode behavior to a stored decision. It creates the guarded preview, records execution audit state on the decision, stops at `awaiting_approval` for `live_guarded`, and only submits in `live_autonomous` when explicit submit intent, the confirmation string, preview policy, trading config, and credentials all pass.
 
-Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It supports `dry_run` for eligibility checks and `auto_submit=false` for autonomous sessions that should create previews without submitting.
+Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It supports `dry_run` for eligibility checks and defaults to preview-only behavior unless autonomous submission is deliberately enabled with both required fields.
 
 Use `npm run smoke:autotrader-mcp` to run a no-submit MCP smoke: seed an ending-soon universe, start a tiny `live_guarded` session, dry-run executor eligibility, create one guarded preview, and assert that zero orders were submitted.
 

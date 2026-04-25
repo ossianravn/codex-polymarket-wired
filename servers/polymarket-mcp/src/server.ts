@@ -74,6 +74,10 @@ import {
   runAutoTradingIteration,
   type AutoTradingRiskProfile
 } from "../../../packages/auto-trader/src/index.js";
+import {
+  LIVE_AUTONOMOUS_SUBMIT_CONFIRMATION,
+  liveAutonomousSubmitBlockers
+} from "./autotrader-live-boundary.js";
 
 const server = new McpServer(
   {
@@ -151,7 +155,8 @@ const AUTO_TRADING_EXECUTION_FINAL_STATUSES = new Set([
   "blocked",
   "blocked_preview",
   "blocked_submission_config",
-  "blocked_policy_changed"
+  "blocked_policy_changed",
+  "blocked_live_autonomous_not_deliberately_enabled"
 ]);
 
 function autoTradingDecisionExecutionStatus(decision: StoredAutoTradingDecisionRecord): string | undefined {
@@ -2141,7 +2146,8 @@ server.registerTool(
     inputSchema: {
       session_id: z.string().min(1),
       decision_id: z.string().min(1),
-      auto_submit: z.boolean().default(true)
+      auto_submit: z.boolean().default(false),
+      live_autonomous_submit_confirmation: z.string().optional()
     }
   },
   async (input) => {
@@ -2278,6 +2284,30 @@ server.registerTool(
       });
     }
 
+    const liveAutonomousBlockers = liveAutonomousSubmitBlockers({
+      mode: session.mode,
+      autoSubmit: input.auto_submit,
+      confirmation: input.live_autonomous_submit_confirmation
+    });
+    if (liveAutonomousBlockers.length > 0) {
+      const updatedDecision = writeExecution({
+        status: "blocked_live_autonomous_not_deliberately_enabled",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        previewId: preview.previewId,
+        blockers: liveAutonomousBlockers,
+        requiredConfirmation: LIVE_AUTONOMOUS_SUBMIT_CONFIRMATION,
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        previewResult,
+        execution: updatedDecision.payload.execution
+      });
+    }
+
     const { limits, policyHash } = await currentLimits();
     if (!config.enableTrading || !limits.tradingEnabled || !hasTradingCredentials(config)) {
       const updatedDecision = writeExecution({
@@ -2369,7 +2399,8 @@ server.registerTool(
     inputSchema: {
       session_id: z.string().min(1).optional(),
       limit: z.number().int().min(1).max(25).default(5),
-      auto_submit: z.boolean().default(true),
+      auto_submit: z.boolean().default(false),
+      live_autonomous_submit_confirmation: z.string().optional(),
       dry_run: z.boolean().default(false)
     }
   },
@@ -2501,6 +2532,32 @@ server.registerTool(
           policyHash: preview.policyHash,
           autoSubmitDisabled: !input.auto_submit,
           blockers: gate.canSubmitAutonomously ? [] : ["mode_not_autonomous"],
+          createdAt: now
+        });
+        results.push({
+          sessionId: session.sessionId,
+          decisionId: decision.decisionId,
+          gate,
+          previewId: preview.previewId,
+          execution: updatedDecision.payload.execution,
+          decision: compactStoredAutoTradingDecision(updatedDecision)
+        });
+        continue;
+      }
+
+      const liveAutonomousBlockers = liveAutonomousSubmitBlockers({
+        mode: session.mode,
+        autoSubmit: input.auto_submit,
+        confirmation: input.live_autonomous_submit_confirmation
+      });
+      if (liveAutonomousBlockers.length > 0) {
+        const updatedDecision = writeExecution({
+          status: "blocked_live_autonomous_not_deliberately_enabled",
+          mode: session.mode,
+          decisionId: decision.decisionId,
+          previewId: preview.previewId,
+          blockers: liveAutonomousBlockers,
+          requiredConfirmation: LIVE_AUTONOMOUS_SUBMIT_CONFIRMATION,
           createdAt: now
         });
         results.push({

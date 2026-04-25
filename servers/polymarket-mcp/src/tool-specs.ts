@@ -376,7 +376,7 @@ export const TOOLS: ToolSpec[] = [
     name: "execute_auto_trading_decision",
     access: "write",
     description:
-      "Execute a persisted autonomous trading decision according to its session mode. Paper is blocked, live_guarded creates a guarded preview and waits for approval, and live_autonomous submits only after preview policy passes and trading config permits it.",
+      "Execute a persisted autonomous trading decision according to its session mode. Paper is blocked, live_guarded creates a guarded preview and waits for approval, and live_autonomous is preview-only unless auto_submit is true and the live-autonomous confirmation string is supplied.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -385,8 +385,12 @@ export const TOOLS: ToolSpec[] = [
         decision_id: { type: "string", minLength: 1 },
         auto_submit: {
           type: "boolean",
-          default: true,
-          description: "For live_autonomous only. When false, create and persist the preview but do not submit it."
+          default: false,
+          description: "For live_autonomous only. Defaults to false. When false, create and persist the preview but do not submit it."
+        },
+        live_autonomous_submit_confirmation: {
+          type: "string",
+          description: "Required with auto_submit=true for live_autonomous submission. Must equal CONFIRM_LIVE_AUTONOMOUS_SUBMIT."
         }
       },
       required: ["session_id", "decision_id"]
@@ -396,7 +400,7 @@ export const TOOLS: ToolSpec[] = [
     name: "run_auto_trading_executor",
     access: "write",
     description:
-      "Run the autonomous execution loop for pending live-mode auto-trading decisions. It skips paper and already-executed decisions, creates guarded previews, waits for approval in live_guarded, and can submit in live_autonomous only after all checks pass.",
+      "Run the autonomous execution loop for pending live-mode auto-trading decisions. It skips paper and already-executed decisions, creates guarded previews, waits for approval in live_guarded, and keeps live_autonomous preview-only unless auto_submit is true and the live-autonomous confirmation string is supplied.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -405,8 +409,12 @@ export const TOOLS: ToolSpec[] = [
         limit: { type: "integer", minimum: 1, maximum: 25, default: 5 },
         auto_submit: {
           type: "boolean",
-          default: true,
-          description: "For live_autonomous only. When false, create previews but do not submit."
+          default: false,
+          description: "For live_autonomous only. Defaults to false. When false, create previews but do not submit."
+        },
+        live_autonomous_submit_confirmation: {
+          type: "string",
+          description: "Required with auto_submit=true for live_autonomous submission. Must equal CONFIRM_LIVE_AUTONOMOUS_SUBMIT."
         },
         dry_run: {
           type: "boolean",
