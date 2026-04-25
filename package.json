@@ -30,6 +30,7 @@
     "autotrader:due-status": "node ./scripts/autotrader-status.mjs --due-status",
     "autotrader:due-status:json": "node ./scripts/autotrader-status.mjs --due-status --json",
     "universe:once": "tsx ./scripts/universe-discovery.ts",
+    "forecast:write": "tsx ./scripts/forecast-writer.ts",
     "autotrader:once": "tsx ./scripts/autotrader-iteration.ts",
     "autotrader:simulate": "tsx ./scripts/autotrader-simulation.ts"
   },

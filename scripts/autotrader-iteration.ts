@@ -2,6 +2,7 @@ import process from "node:process";
 
 import {
   compactAutoTradingIterationResult,
+  runIndependentForecastWriter,
   runAutoTradingIteration,
   type AutoTradingRiskProfile
 } from "../packages/auto-trader/src/index.js";
@@ -16,6 +17,7 @@ interface CliOptions {
   riskProfile?: AutoTradingRiskProfile;
   mode?: "paper" | "live_guarded" | "live_autonomous";
   limit: number;
+  autoForecast: boolean;
   json: boolean;
   compact: boolean;
 }
@@ -23,6 +25,7 @@ interface CliOptions {
 function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
   const options: CliOptions = {
     limit: 25,
+    autoForecast: true,
     json: false,
     compact: false
   };
@@ -64,6 +67,8 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
       index += 1;
     } else if (arg.startsWith("--limit=")) {
       options.limit = Number(arg.split("=")[1]);
+    } else if (arg === "--no-auto-forecast") {
+      options.autoForecast = false;
     } else if (arg === "--json") {
       options.json = true;
     } else if (arg === "--compact") {
@@ -101,6 +106,9 @@ async function main(): Promise<void> {
   }
   const config = loadRuntimeConfig();
   const store = openStateStore(config.stateDbPath);
+  const forecastWriter = options.autoForecast
+    ? runIndependentForecastWriter(store, { limit: Math.max(options.limit, 100) })
+    : undefined;
   const result = runAutoTradingIteration(store, {
     sessionId: options.sessionId,
     mandate: options.sessionId
@@ -120,14 +128,25 @@ async function main(): Promise<void> {
     projectMode: "local",
     findingsCount: result.candidates.length,
     summary: `auto-trader proposed ${result.summary.proposedOrders} paper orders; next run ${result.summary.nextRunAt ?? "unknown"}`,
-    output: result as unknown as Record<string, unknown>
+    output: {
+      forecastWriter,
+      iteration: result
+    } as unknown as Record<string, unknown>
   });
   store.close();
   if (options.json) {
-    const output = options.compact ? compactAutoTradingIterationResult(result) : result;
+    const output = {
+      forecastWriter,
+      ...(options.compact ? compactAutoTradingIterationResult(result) : result)
+    };
     console.log(JSON.stringify(output, null, 2));
   } else {
-    console.log(renderSummary(result));
+    console.log([
+      forecastWriter
+        ? `Forecast writer: ${forecastWriter.written} written, ${forecastWriter.skippedExisting} existing, ${forecastWriter.skippedIneligible} ineligible`
+        : "Forecast writer: skipped",
+      renderSummary(result)
+    ].join("\n"));
   }
 }
 

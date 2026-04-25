@@ -71,6 +71,7 @@ import {
 import {
   buildAutoTradingExecutionGate,
   compactAutoTradingIterationResult,
+  runIndependentForecastWriter,
   runAutoTradingIteration,
   type AutoTradingRiskProfile
 } from "../../../packages/auto-trader/src/index.js";
@@ -1693,6 +1694,7 @@ server.registerTool(
       position_stop_loss_grace_minutes: z.number().min(0).optional(),
       paper_reentry_cooldown_minutes: z.number().min(0).optional(),
       time_exit_hours: z.number().min(0).optional(),
+      auto_forecast: z.boolean().default(true),
       limit: z.number().int().min(1).max(100).default(25),
       compact: z.boolean().default(true)
     }
@@ -1700,6 +1702,13 @@ server.registerTool(
   async (input) => {
     const config = loadRuntimeConfig();
     const store = currentStateStore(config);
+    const forecastWriter = input.auto_forecast
+      ? runIndependentForecastWriter(store, {
+        limit: Math.max(input.limit, 100),
+        minLiquidityUsdc: input.min_liquidity_usdc,
+        maxSpreadCents: input.max_spread_cents
+      })
+      : undefined;
     const result = runAutoTradingIteration(store, {
       mandate: {
         name: input.name,
@@ -1727,10 +1736,16 @@ server.registerTool(
       projectMode: "local",
       findingsCount: result.candidates.length,
       summary: `started auto-trading session ${result.session.sessionId}; proposed ${result.summary.proposedOrders} paper orders`,
-      output: compactAutoTradingIterationResult(result) as unknown as Record<string, unknown>
+      output: {
+        forecastWriter,
+        iteration: compactAutoTradingIterationResult(result)
+      } as unknown as Record<string, unknown>
     });
     const response = input.compact ? compactAutoTradingIterationResult(result) : result;
-    return textResult(response as unknown as Record<string, unknown>);
+    return textResult({
+      forecastWriter,
+      ...response
+    } as unknown as Record<string, unknown>);
   }
 );
 
@@ -1768,12 +1783,16 @@ server.registerTool(
     inputSchema: {
       session_id: z.string().min(1),
       limit: z.number().int().min(1).max(100).default(25),
+      auto_forecast: z.boolean().default(true),
       compact: z.boolean().default(true)
     }
   },
   async (input) => {
     const config = loadRuntimeConfig();
     const store = currentStateStore(config);
+    const forecastWriter = input.auto_forecast
+      ? runIndependentForecastWriter(store, { limit: Math.max(input.limit, 100) })
+      : undefined;
     const result = runAutoTradingIteration(store, {
       sessionId: input.session_id,
       limit: input.limit
@@ -1784,10 +1803,16 @@ server.registerTool(
       projectMode: "local",
       findingsCount: result.candidates.length,
       summary: `auto-trading session ${result.session.sessionId}; proposed ${result.summary.proposedOrders} paper orders`,
-      output: compactAutoTradingIterationResult(result) as unknown as Record<string, unknown>
+      output: {
+        forecastWriter,
+        iteration: compactAutoTradingIterationResult(result)
+      } as unknown as Record<string, unknown>
     });
     const response = input.compact ? compactAutoTradingIterationResult(result) : result;
-    return textResult(response as unknown as Record<string, unknown>);
+    return textResult({
+      forecastWriter,
+      ...response
+    } as unknown as Record<string, unknown>);
   }
 );
 

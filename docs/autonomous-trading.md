@@ -122,6 +122,16 @@ Entry proposals require an independent fair-value artifact before the planner co
 
 The auto-trader blocks entry candidates as `research_required` when the forecast is missing, unsealed, stale, expired, contaminated by venue price, lacks numerical checks, or has insufficient uncertainty-adjusted edge. Venue price, spread, and orderbook data are used only after this artifact exists, and only for edge and execution checks.
 
+Use `forecast:write` to annotate the latest persisted universe run with sealed screening forecasts:
+
+```bash
+node --import tsx ./scripts/forecast-writer.ts --limit 100 --min-liquidity-usdc 1000 --max-spread-cents 12
+```
+
+The writer uses non-price universe evidence only: structural type, catalyst/modelability scores, ambiguity/risk scores, resolution metadata, and reason codes. It deliberately records `method: "screening_forecast_v0"` and a counter-case so deeper research can replace it later. Screening forecasts can unlock paper entries only; live-mode entries remain blocked until a deeper non-screening forecast method replaces the artifact. It skips existing forecasts unless `--overwrite` is provided.
+
+`start_auto_trading_session` and `run_auto_trading_iteration` call this writer by default through `auto_forecast=true`, so paper sessions can produce candidates after a universe scan while still respecting the forecast-before-price guard. Pass `auto_forecast=false` when testing the hard research gate itself.
+
 ## live execution modes
 
 The session mode controls execution:

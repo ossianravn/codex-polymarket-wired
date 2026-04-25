@@ -7,6 +7,13 @@ import type {
   StoredPaperTradingLedger,
   StoredUniverseMarketInput
 } from "../../state-store/src/index.js";
+export {
+  buildIndependentForecastArtifact,
+  runIndependentForecastWriter,
+  type ForecastWriterInput,
+  type ForecastWriterResult,
+  type IndependentForecastArtifact
+} from "./forecast-writer.js";
 
 export type AutoTradingRiskProfile = "conservative" | "balanced" | "aggressive";
 export type AutoTradingMode = "paper" | "live_guarded" | "live_autonomous";
@@ -579,6 +586,9 @@ function evaluateIndependentForecastEdge(
   }
   if (forecast.sealed !== true) {
     blockers.push("independent_forecast_not_sealed");
+  }
+  if (mandate.mode !== "paper" && forecast.method === "screening_forecast_v0") {
+    blockers.push("independent_forecast_screening_only");
   }
   if (forecast.usesVenuePrice === true || forecast.usesMarketPrice === true || forecast.priceContaminated === true) {
     blockers.push("independent_forecast_price_contaminated");

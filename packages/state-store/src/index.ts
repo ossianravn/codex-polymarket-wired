@@ -2371,6 +2371,20 @@ export class StateStore {
     return row ? universeMarketRowToRecord(row) : null;
   }
 
+  updateUniverseMarketRawJson(
+    runId: string,
+    marketKey: string,
+    rawJson: Record<string, unknown>,
+    capturedAt = nowIso()
+  ): Record<string, unknown> | null {
+    this.db.prepare(`
+      UPDATE universe_markets
+      SET raw_json = ?, captured_at = ?
+      WHERE run_id = ? AND market_key = ?
+    `).run(jsonString(rawJson, {}), capturedAt, runId, marketKey);
+    return this.getUniverseMarket(runId, marketKey);
+  }
+
   storePreview(preview: StoredPreviewRecord): StoredPreviewRecord {
     const marketSnapshot = unknownRecord(preview.marketSnapshot);
     const marketKey = this.resolveMarketKey({

@@ -303,6 +303,11 @@ export const TOOLS: ToolSpec[] = [
         position_stop_loss_grace_minutes: { type: "number", minimum: 0 },
         paper_reentry_cooldown_minutes: { type: "number", minimum: 0 },
         time_exit_hours: { type: "number", minimum: 0 },
+        auto_forecast: {
+          type: "boolean",
+          default: true,
+          description: "Write sealed screening independentForecast artifacts for eligible universe markets before planning."
+        },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
         compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }
       },
@@ -320,6 +325,11 @@ export const TOOLS: ToolSpec[] = [
       properties: {
         session_id: { type: "string", minLength: 1 },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
+        auto_forecast: {
+          type: "boolean",
+          default: true,
+          description: "Write sealed screening independentForecast artifacts for eligible universe markets before planning."
+        },
         compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }
       },
       required: ["session_id"]
