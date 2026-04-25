@@ -2,6 +2,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 import {
+  generateResearchSourcePacks,
+  type ResearchAgentCommandOptions
+} from "./autotrader-research-agent-command.js";
+import {
   buildResearchEvidenceBundles,
   buildResearchEvidenceTemplate,
   runIndependentForecastWriter,
@@ -18,6 +22,11 @@ interface CliOptions {
   sessionId?: string;
   limit?: number;
   sourceFile?: string;
+  sourceProvider?: ResearchAgentCommandOptions["provider"];
+  agentModel?: string;
+  agentTimeoutMs?: number;
+  codexBin?: string;
+  codexProfile?: string;
   templateFile?: string;
   outFile?: string;
   record: boolean;
@@ -46,12 +55,30 @@ function readNumberArg(name: string): number | undefined {
   return Number.isFinite(numeric) ? numeric : undefined;
 }
 
+function readJsonStringArrayEnv(name: string): string[] {
+  const value = process.env[name];
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : [];
+  } catch {
+    return value.split(/\s+/u).map((item) => item.trim()).filter(Boolean);
+  }
+}
+
 function parseCliArgs(): CliOptions {
   return {
     dbPath: readArg("db") ?? process.env.AUTOTRADER_STATE_DB_PATH,
     sessionId: readArg("session-id") ?? process.env.AUTOTRADER_SESSION_ID,
     limit: readNumberArg("limit"),
     sourceFile: readArg("source-file") ?? process.env.AUTOTRADER_RESEARCH_SOURCE_FILE,
+    sourceProvider: (readArg("source-provider") ?? process.env.AUTOTRADER_RESEARCH_AGENT_PROVIDER) as ResearchAgentCommandOptions["provider"] | undefined,
+    agentModel: readArg("agent-model") ?? process.env.AUTOTRADER_RESEARCH_AGENT_MODEL,
+    agentTimeoutMs: readNumberArg("agent-timeout-ms"),
+    codexBin: readArg("codex-bin"),
+    codexProfile: readArg("codex-profile") ?? process.env.AUTOTRADER_CODEX_PROFILE,
     templateFile: readArg("template-file") ?? process.env.AUTOTRADER_RESEARCH_TEMPLATE_FILE,
     outFile: readArg("out") ?? readArg("evidence-file") ?? process.env.AUTOTRADER_RESEARCH_EVIDENCE_FILE,
     record: process.argv.includes("--record"),
@@ -122,12 +149,18 @@ function renderText(result: {
 
 async function main(): Promise<void> {
   const options = parseCliArgs();
-  if (!options.sourceFile) {
-    throw new Error("Missing --source-file with independent research source packs.");
+  if (!options.sourceFile && !options.sourceProvider) {
+    throw new Error("Missing --source-file with independent research source packs, or --source-provider=codex_cli|openai.");
+  }
+  if (
+    options.sourceProvider &&
+    options.sourceProvider !== "codex_cli" &&
+    options.sourceProvider !== "openai"
+  ) {
+    throw new Error(`Unsupported --source-provider '${options.sourceProvider}'.`);
   }
   const config = loadRuntimeConfig();
   const dbPath = options.dbPath ?? config.stateDbPath;
-  const sourcePacks = sourcePacksFromJson(await readJsonFile<unknown>(options.sourceFile));
   const store = openStateStore(dbPath);
   try {
     const templates = options.templateFile
@@ -136,6 +169,19 @@ async function main(): Promise<void> {
         sessionId: options.sessionId,
         limit: options.limit
       });
+    const sourcePacks = options.sourceFile
+      ? sourcePacksFromJson(await readJsonFile<unknown>(options.sourceFile))
+      : (await generateResearchSourcePacks(templates, {
+        provider: options.sourceProvider ?? "codex_cli",
+        model: options.agentModel ?? process.env.AUTOTRADER_RESEARCH_AGENT_MODEL ?? "gpt-5.2",
+        apiKey: process.env.OPENAI_API_KEY,
+        apiBaseUrl: process.env.AUTOTRADER_RESEARCH_AGENT_API_BASE_URL ?? "https://api.openai.com/v1/responses",
+        codexBin: options.codexBin ?? process.env.AUTOTRADER_CODEX_BIN ?? "codex",
+        codexPrefixArgs: readJsonStringArrayEnv("AUTOTRADER_CODEX_PREFIX_ARGS"),
+        codexProfile: options.codexProfile,
+        timeoutMs: options.agentTimeoutMs ?? Number(process.env.AUTOTRADER_RESEARCH_AGENT_TIMEOUT_MS ?? 90_000),
+        limit: options.limit ?? Number(process.env.AUTOTRADER_RESEARCH_AGENT_LIMIT ?? 6)
+      })).sourcePacks;
     const pipeline = options.record
       ? runResearchEvidencePipeline(store, {
         templates,

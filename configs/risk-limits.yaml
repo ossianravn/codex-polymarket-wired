@@ -1,4 +1,4 @@
-trading_enabled: true
+trading_enabled: false
 require_preview_before_submit: true
 require_geoblock_check: true
 max_single_order_usdc: 10

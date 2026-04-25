@@ -83,6 +83,20 @@ node --import tsx .\scripts\autotrader-iteration.ts --budget-usdc 30 --timeframe
 
 3. If the result contains `researchRequests`, create an independent evidence bundle. Use [autotrader-research-evidence.example.json](../examples/autotrader-research-evidence.example.json) as the shape.
 
+For agent-assisted paper research, generate source packs from pending templates. This is still paper-only and still passes through the same contamination and evidence gates:
+
+```powershell
+$env:POLYMARKET_ENABLE_TRADING='false'
+node --import tsx .\scripts\autotrader-research-worker.ts --session-id <session-id> --template --limit 6 --template-file .\state\paper-research-template.json --json
+node --import tsx .\scripts\autotrader-research-provider.ts --session-id <session-id> --template-file .\state\paper-research-template.json --source-provider codex_cli --limit 6 --record --write-forecasts --json
+```
+
+If the agent cannot produce source-backed packs quickly, fail fast and use the manual source-pack path instead:
+
+```powershell
+node --import tsx .\scripts\autotrader-research-provider.ts --session-id <session-id> --template-file .\state\paper-research-template.json --source-provider codex_cli --agent-timeout-ms 60000 --limit 2 --record --write-forecasts --json
+```
+
 4. Record the evidence bundle as a research run.
 
 ```powershell
