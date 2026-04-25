@@ -126,6 +126,8 @@ The heartbeat runner accepts environment-variable configuration for automation c
 
 Heartbeat observations are persisted to `state/autotrader-heartbeat.jsonl` and `state/autotrader-heartbeat-latest.json` by default. Override with `AUTOTRADER_OBSERVATION_LOG_PATH` and `AUTOTRADER_LATEST_REPORT_PATH`. Scheduled monitors should key off `observation.materialChanges`.
 
+Use `npm run autotrader:status` when an automation only needs to report the latest observation. It reads the latest snapshot and JSONL history without touching Polymarket APIs or creating previews. Use `npm run autotrader:status:json` or `AUTOTRADER_STATUS_JSON=true` for machine-readable output.
+
 ## MCP tools
 
 - `start_auto_trading_session`

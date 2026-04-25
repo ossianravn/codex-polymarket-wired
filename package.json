@@ -23,6 +23,8 @@
     "state:summary": "tsx ./scripts/state-summary.ts",
     "state:queue": "tsx ./scripts/execution-queue.ts",
     "autotrader:heartbeat": "node ./scripts/autotrader-heartbeat.mjs",
+    "autotrader:status": "node ./scripts/autotrader-status.mjs",
+    "autotrader:status:json": "node ./scripts/autotrader-status.mjs --json",
     "universe:once": "tsx ./scripts/universe-discovery.ts",
     "autotrader:once": "tsx ./scripts/autotrader-iteration.ts",
     "autotrader:simulate": "tsx ./scripts/autotrader-simulation.ts"

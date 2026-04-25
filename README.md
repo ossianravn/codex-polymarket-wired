@@ -146,6 +146,8 @@ Heartbeat automations can configure the mandate through environment variables su
 
 Each heartbeat also writes durable observation state to `state/autotrader-heartbeat.jsonl` and `state/autotrader-heartbeat-latest.json` by default. Use `AUTOTRADER_OBSERVATION_LOG_PATH` and `AUTOTRADER_LATEST_REPORT_PATH` to override those paths. The `observation.materialChanges` field is intended for scheduled reports.
 
+Use `npm run autotrader:status` to summarize the latest heartbeat observation without running another market scan. It supports the same observation path environment variables. Use `npm run autotrader:status:json` or `AUTOTRADER_STATUS_JSON=true` for machine-readable reports.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:
