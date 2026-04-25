@@ -10,8 +10,10 @@ import {
   refreshAutoTradingMarketSnapshots,
   runAutoTradingIteration,
   runIndependentForecastWriter,
+  runResearchEvidencePipeline,
   type AutoTradingSnapshotRefreshResult,
-  type AutoTradingMandateInput
+  type AutoTradingMandateInput,
+  type ResearchSourcePack
 } from "../packages/auto-trader/src/index.js";
 import {
   ingestUniverseMarkets,
@@ -44,6 +46,7 @@ export interface AutotraderDaemonOptions {
   autoRefreshSnapshots?: boolean;
   refreshSnapshotLimit?: number;
   refreshSnapshotMaxAgeMinutes?: number;
+  researchSourceFile?: string;
   maxUniverseAgeMinutes?: number;
   universeSource?: UniverseSource;
   universePageSize?: number;
@@ -143,6 +146,7 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     autoRefreshSnapshots: envBoolean("AUTOTRADER_REFRESH_SNAPSHOTS", true),
     refreshSnapshotLimit: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_LIMIT", 50),
     refreshSnapshotMaxAgeMinutes: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_MAX_AGE_MINUTES", 5),
+    researchSourceFile: envString("AUTOTRADER_RESEARCH_SOURCE_FILE"),
     maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
     universeSource: envString("AUTOTRADER_UNIVERSE_SOURCE") as UniverseSource | undefined,
     universePageSize: envNumber("AUTOTRADER_UNIVERSE_PAGE_SIZE", 250),
@@ -198,6 +202,9 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     } else if (arg === "--refresh-snapshot-max-age-minutes" || arg.startsWith("--refresh-snapshot-max-age-minutes=")) {
       options.refreshSnapshotMaxAgeMinutes = Number(readArgValue(argv, index));
       if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-source-file" || arg.startsWith("--research-source-file=")) {
+      options.researchSourceFile = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--max-universe-age-minutes" || arg.startsWith("--max-universe-age-minutes=")) {
       options.maxUniverseAgeMinutes = Number(readArgValue(argv, index));
       if (consumedNext(argv, index)) index += 1;
@@ -243,6 +250,26 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
   options.universeLimitPages = Math.max(1, Math.min(100, Number(options.universeLimitPages ?? 1)));
   options.universeEnrichTopN = Math.max(0, Math.min(5_000, Number(options.universeEnrichTopN ?? 250)));
   return options;
+}
+
+function sourcePacksFromJson(parsed: unknown): ResearchSourcePack[] {
+  if (Array.isArray(parsed)) {
+    return parsed as ResearchSourcePack[];
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { sourcePacks?: unknown }).sourcePacks)) {
+    return (parsed as { sourcePacks: ResearchSourcePack[] }).sourcePacks;
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { packs?: unknown }).packs)) {
+    return (parsed as { packs: ResearchSourcePack[] }).packs;
+  }
+  throw new Error("Research source file must be an array or an object with sourcePacks array.");
+}
+
+async function loadResearchSourcePacks(filePath: string | undefined): Promise<ResearchSourcePack[] | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  return sourcePacksFromJson(JSON.parse(await readFile(absolutePath(filePath), "utf8")) as unknown);
 }
 
 async function refreshSnapshotsForSession(
@@ -703,6 +730,7 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
   const store = openStateStore(options.stateDbPath);
   const startedAt = now.toISOString();
   const observations: Record<string, unknown>[] = [];
+  const researchSourcePacks = await loadResearchSourcePacks(options.researchSourceFile);
   try {
     for (const session of sessionsToCheck(store, options)) {
       assertSafeMode(options, session);
@@ -726,6 +754,15 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         options,
         decisionNow
       );
+      const researchPipeline = researchSourcePacks && researchSourcePacks.length > 0
+        ? runResearchEvidencePipeline(store, {
+          sessionId: session.sessionId,
+          limit: options.limit,
+          now: decisionNow,
+          sourcePacks: researchSourcePacks,
+          automationName: "autotrader-daemon"
+        })
+        : undefined;
       const forecastWriter = options.autoForecast
         ? runIndependentForecastWriter(store, {
           now: decisionNow,
@@ -756,6 +793,7 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         iterationId: iteration.iterationId,
         universeRefresh,
         snapshotRefresh,
+        researchPipeline,
         forecastWriter,
         summary: compact.summary,
         budgetUsdc: compact.summary.budgetUsdc,

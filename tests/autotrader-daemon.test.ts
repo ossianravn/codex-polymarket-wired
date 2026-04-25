@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -64,6 +64,7 @@ test("daemon argument parser defaults to paper loop and supports once mode", () 
   assert.equal(options.autoRefreshSnapshots, true);
   assert.equal(options.refreshSnapshotLimit, 50);
   assert.equal(options.refreshSnapshotMaxAgeMinutes, 5);
+  assert.equal(options.researchSourceFile, undefined);
   assert.equal(options.stateDbPath, "state/test.sqlite");
 });
 
@@ -102,6 +103,204 @@ test("universe refresh decision only refreshes missing or stale discovery runs",
   assert.equal(stale.reason, "stale");
   assert.equal(stale.latestRunId, "run-2");
   assert.equal(stale.ageMinutes, 20);
+});
+
+test("daemon once records source-pack research and upgrades forecasts before planning", async () => {
+  await withTempDir(async (dir) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const dbPath = path.join(dir, "state.sqlite");
+    const sourcePath = path.join(dir, "source-packs.json");
+    const marketKey = "condition:daemon-research";
+    const store = openStateStore(dbPath);
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey,
+      conditionId: "daemon-research",
+      title: "Daemon research market",
+      outcomes: ["Yes", "No"],
+      clobTokenIds: ["yes-token", "no-token"],
+      yesTokenId: "yes-token",
+      noTokenId: "no-token",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      endDate: new Date(now.getTime() + 12 * 60 * 60_000).toISOString(),
+      liquidityUsd: 25_000,
+      volume24hUsd: 5_000,
+      impliedProb: 0.24,
+      bestBid: 0.23,
+      bestAsk: 0.24,
+      midpoint: 0.235,
+      spreadCents: 1,
+      categoryGroup: "politics",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      opportunityMode: "resolution-watch",
+      tradabilityScore: 90,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: 95,
+      resolutionAmbiguityScore: 10,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {},
+      capturedAt: now.toISOString()
+    }]);
+    store.createAutoTradingSession({
+      sessionId: "daemon-research-session",
+      name: "daemon research test",
+      status: "active",
+      mode: "paper",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      startedAt: now.toISOString(),
+      endsAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
+      heartbeatMinutes: 15,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+    store.recordAutoTradingDecision({
+      sessionId: "daemon-research-session",
+      iterationId: "iteration-1",
+      marketKey,
+      title: "Daemon research market",
+      action: "research_required",
+      status: "research",
+      score: 91,
+      reasonCodes: ["forecast_gate:screening_only"],
+      blockers: ["independent_forecast_screening_only"],
+      payload: {
+        researchRequest: {
+          requestId: "research:daemon",
+          createdAt: now.toISOString(),
+          dueAt: new Date(now.getTime() + 30 * 60_000).toISOString(),
+          priority: "high",
+          marketKey,
+          title: "Daemon research market",
+          score: 91,
+          forecastBlockers: ["independent_forecast_screening_only"],
+          reasonCodes: ["forecast_gate:screening_only"],
+          requiredArtifact: {
+            method: "deep_research_forecast_v1",
+            minimumEvidenceItems: 2,
+            requiresCounterEvidence: true,
+            requiredFields: ["fairValueLow", "fairValueBase", "fairValueHigh"],
+            forbiddenEvidence: ["Polymarket odds", "venue price", "orderbook"],
+            freshnessHours: 24
+          },
+          researchQuestion: "Will Daemon research market resolve YES?",
+          marketContext: {
+            categoryGroup: "politics",
+            structuralType: "single-binary",
+            opportunityMode: "resolution-watch",
+            horizonBucket: "resolves-today",
+            endDate: new Date(now.getTime() + 12 * 60 * 60_000).toISOString(),
+            outcomes: ["Yes", "No"],
+            reasonCodes: ["clear_resolution_text"]
+          }
+        }
+      }
+    });
+    store.close();
+
+    await writeFile(sourcePath, `${JSON.stringify({
+      sourcePacks: [{
+        marketKey,
+        title: "Daemon research market",
+        question: "Will Daemon research market resolve YES?",
+        thesis: "Official status evidence favors completion inside the window, while procedural timing remains the main counter-case.",
+        fairValueBase: 0.62,
+        uncertainty: 0.08,
+        supportsYes: [{
+          source: "Official status source",
+          title: "Milestone remains scheduled",
+          url: "https://example.com/status",
+          summary: "The official source keeps the relevant milestone inside the market window.",
+          stance: "supports_yes",
+          confidence: "medium"
+        }],
+        supportsNo: [{
+          source: "Independent counter source",
+          title: "Timing dependency remains",
+          url: "https://example.com/counter",
+          summary: "A non-venue source identifies an unresolved dependency that can delay resolution.",
+          stance: "supports_no",
+          confidence: "medium"
+        }],
+        openQuestions: ["Whether the dependency clears before cutoff."],
+        providers: ["daemon-test-source-pack"],
+        numericalAnchors: ["Base 0.50 adjusted to 0.62 for status evidence, with 0.08 uncertainty."],
+        counterCase: "The unresolved dependency can delay completion.",
+        completedAt: now.toISOString()
+      }]
+    }, null, 2)}\n`, "utf8");
+
+    const previousTradingFlag = process.env.POLYMARKET_ENABLE_TRADING;
+    process.env.POLYMARKET_ENABLE_TRADING = "false";
+    try {
+      const options: AutotraderDaemonOptions = {
+        sessionId: "daemon-research-session",
+        mode: "paper",
+        loop: false,
+        intervalSeconds: 30,
+        respectNextRunAt: false,
+        schedulerSlackSeconds: 30,
+        limit: 10,
+        autoForecast: true,
+        autoRefreshUniverse: false,
+        autoRefreshSnapshots: true,
+        refreshSnapshotLimit: 10,
+        refreshSnapshotMaxAgeMinutes: 5,
+        researchSourceFile: sourcePath,
+        stateDbPath: dbPath,
+        latestReportPath: path.join(dir, "latest.json"),
+        observationLogPath: path.join(dir, "daemon.jsonl"),
+        lockDir: path.join(dir, "daemon.lock"),
+        staleLockSeconds: 60,
+        json: true
+      };
+      const report = await runDaemonOnce(options, now);
+      const observations = report.observations as Array<Record<string, unknown>>;
+      const researchPipeline = observations[0]?.researchPipeline as {
+        provider?: { writtenBundles?: number };
+        worker?: { recordedResearchRuns?: number };
+      } | undefined;
+      const forecastWriter = observations[0]?.forecastWriter as { written?: number; forecasts?: Array<{ method?: string }> } | undefined;
+
+      assert.equal(report.ok, true);
+      assert.equal(researchPipeline?.provider?.writtenBundles, 1);
+      assert.equal(researchPipeline?.worker?.recordedResearchRuns, 1);
+      assert.equal(forecastWriter?.written, 1);
+      assert.equal(forecastWriter?.forecasts?.[0]?.method, "deep_research_forecast_v1");
+    } finally {
+      if (previousTradingFlag === undefined) {
+        delete process.env.POLYMARKET_ENABLE_TRADING;
+      } else {
+        process.env.POLYMARKET_ENABLE_TRADING = previousTradingFlag;
+      }
+    }
+
+    const verifyStore = openStateStore(dbPath);
+    try {
+      const market = verifyStore.getUniverseMarket(runId, marketKey);
+      const forecast = (market?.rawJson as Record<string, unknown>).independentForecast as Record<string, unknown>;
+      assert.equal(forecast.method, "deep_research_forecast_v1");
+    } finally {
+      verifyStore.close();
+    }
+  });
 });
 
 test("daemon due status respects latest iteration next_check_at", () => {
