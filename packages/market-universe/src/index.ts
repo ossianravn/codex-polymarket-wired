@@ -9,7 +9,7 @@ import {
   type RuntimeConfig
 } from "../../polymarket-core/src/index.js";
 
-export type UniverseSource = "markets_keyset" | "events_keyset" | "both";
+export type UniverseSource = "markets_keyset" | "events_keyset" | "gamma_markets" | "gamma_events" | "composite" | "both";
 export type EnrichmentProfile = "none" | "microstructure" | "microstructure_and_history";
 
 export type StructuralType =
@@ -278,13 +278,14 @@ export interface FetchMarketsKeysetPageArgs {
   volumeNumMin?: number;
   order?: string;
   ascending?: boolean;
+  offset?: number;
 }
 
 const DEFAULT_DISCOVERY_POLICIES: DiscoveryPolicies = {
   version: 1,
   defaults: {
     pageSize: 1000,
-    source: "markets_keyset",
+    source: "composite",
     includeTags: true,
     activeOnly: true,
     includeClosed: false,
@@ -934,8 +935,7 @@ export function classifyStructuralType(market: Partial<UniverseMarket>): Structu
   const sportsSignal =
     market.categoryGroup === "sports" ||
     hasSportsEventSignal(text) ||
-    Boolean(market.sportsMarketType) ||
-    Boolean(market.eventStartTime);
+    Boolean(market.sportsMarketType);
   if (sportsSignal) {
     return "live-sports";
   }
@@ -954,6 +954,10 @@ export function classifyStructuralType(market: Partial<UniverseMarket>): Structu
       "at least",
       "more than",
       "less than",
+      "up or down",
+      "hit",
+      "reach",
+      "dip to",
       "range",
       "between",
       "by how much"
@@ -1039,6 +1043,9 @@ export function classifyHorizonBucket(endDate: string | undefined, now: Date): H
   const diffDays = (timestamp - now.getTime()) / (1000 * 60 * 60 * 24);
   if (diffDays <= 1 && diffDays >= -1) {
     return "resolves-today";
+  }
+  if (diffDays < -1) {
+    return "unknown";
   }
   if (diffDays <= 7) {
     return "short-0-7d";
@@ -1312,17 +1319,27 @@ function reasonCodesForMarket(market: Partial<UniverseMarket>): string[] {
   if (market.negRisk) {
     reasons.push("neg_risk_cluster");
   }
+  if (market.restricted) {
+    reasons.push("restricted_flag_present");
+  }
   return uniqueCompactStrings(reasons);
 }
 
 function disqualifiersForMarket(
   market: Partial<UniverseMarket>,
   policies: DiscoveryPolicies,
-  resolutionAmbiguityScore: number
+  resolutionAmbiguityScore: number,
+  now: Date
 ): string[] {
   const disqualifiers: string[] = [];
-  if (market.closed || market.archived || market.restricted) {
-    disqualifiers.push("inactive_or_restricted");
+  if (market.closed || market.archived || market.active === false || market.acceptingOrders === false) {
+    disqualifiers.push("inactive_or_not_accepting_orders");
+  }
+  if (market.endDate) {
+    const endTimestamp = Date.parse(market.endDate);
+    if (Number.isFinite(endTimestamp) && endTimestamp < now.getTime() - 60 * 60 * 1000) {
+      disqualifiers.push("market_already_ended");
+    }
   }
   if ((market.clobTokenIds?.length ?? 0) === 0) {
     disqualifiers.push("missing_clob_tokens");
@@ -1349,9 +1366,9 @@ export function chooseOpportunityMode(market: UniverseMarket): OpportunityMode {
   if (
     market.closed ||
     market.archived ||
-    market.restricted ||
     (market.acceptingOrders === false && market.active === false) ||
     market.disqualifiers.some((entry) => entry.startsWith("blocked_")) ||
+    market.disqualifiers.includes("market_already_ended") ||
     market.disqualifiers.includes("missing_clob_tokens") ||
     market.disqualifiers.includes("dead_liquidity") ||
     market.resolutionAmbiguityScore >= 80
@@ -1394,7 +1411,8 @@ export function chooseOpportunityMode(market: UniverseMarket): OpportunityMode {
 
 function computeUniverseScores(
   market: UniverseMarket,
-  policies: DiscoveryPolicies
+  policies: DiscoveryPolicies,
+  now = new Date()
 ): UniverseMarket {
   const structure = structureScore(market.structuralType);
   const resolution = resolutionTextScore(market);
@@ -1461,7 +1479,7 @@ function computeUniverseScores(
     modelabilityScore: modelability,
     tradabilityScore: tradability
   });
-  const disqualifiers = disqualifiersForMarket(market, policies, resolutionAmbiguity);
+  const disqualifiers = disqualifiersForMarket(market, policies, resolutionAmbiguity, now);
 
   const withScores: UniverseMarket = {
     ...market,
@@ -1684,7 +1702,8 @@ export function normalizeUniverseMarketFromGammaMarket(
       liquidityBucket,
       spreadBucket
     },
-    policies
+    policies,
+    now
   );
 }
 
@@ -1798,6 +1817,70 @@ export async function fetchAllMarketsKeyset(
   return { markets, pageCount, rawPages };
 }
 
+export async function fetchMarketsListPage(
+  config: RuntimeConfig,
+  args: FetchMarketsKeysetPageArgs
+): Promise<{ markets: unknown[]; raw: unknown }> {
+  const url = buildEndpointUrl(config.gammaUrl, "/markets");
+  url.searchParams.set("limit", String(Math.max(1, Math.min(1000, args.limit ?? 1000))));
+  url.searchParams.set("closed", String(args.closed ?? false));
+  url.searchParams.set("active", String(!(args.closed ?? false)));
+  url.searchParams.set("include_tag", String(args.includeTag ?? true));
+  url.searchParams.set("order", args.order ?? "volume24hr");
+  url.searchParams.set("ascending", String(args.ascending ?? false));
+  url.searchParams.set("offset", String(Math.max(0, args.offset ?? 0)));
+  if (args.liquidityNumMin !== undefined) {
+    url.searchParams.set("liquidity_num_min", String(args.liquidityNumMin));
+  }
+  if (args.volumeNumMin !== undefined) {
+    url.searchParams.set("volume_num_min", String(args.volumeNumMin));
+  }
+
+  const raw = await requestJson<unknown>(url);
+  const payload = parseKeysetPayload(raw);
+  return {
+    markets: payload.items,
+    raw
+  };
+}
+
+export async function fetchAllMarketsList(
+  config: RuntimeConfig,
+  args: IngestMarketUniverseArgs,
+  pools: Array<Pick<FetchMarketsKeysetPageArgs, "order" | "ascending" | "volumeNumMin">> = [
+    { order: "volume24hr", ascending: false },
+    { order: "createdAt", ascending: false },
+    { order: "endDate", ascending: true }
+  ]
+): Promise<{ markets: unknown[]; pageCount: number; rawPages: unknown[] }> {
+  const rawPages: unknown[] = [];
+  const markets: unknown[] = [];
+  const pageSize = Math.max(1, Math.min(1000, args.pageSize ?? 1000));
+  const limitPages = Math.max(1, args.limitPages ?? 1);
+
+  for (const pool of pools) {
+    for (let page = 0; page < limitPages; page += 1) {
+      const result = await fetchMarketsListPage(config, {
+        limit: pageSize,
+        offset: page * pageSize,
+        closed: args.includeClosed ? undefined : false,
+        includeTag: args.includeTags,
+        liquidityNumMin: args.minLiquidityUsdc,
+        order: pool.order,
+        ascending: pool.ascending,
+        volumeNumMin: pool.volumeNumMin
+      });
+      rawPages.push(result.raw);
+      markets.push(...result.markets);
+      if (result.markets.length < pageSize) {
+        break;
+      }
+    }
+  }
+
+  return { markets, pageCount: rawPages.length, rawPages };
+}
+
 export async function fetchEventsKeysetPage(
   config: RuntimeConfig,
   args: FetchMarketsKeysetPageArgs
@@ -1825,6 +1908,70 @@ export async function fetchEventsKeysetPage(
     nextCursor: payload.nextCursor,
     raw
   };
+}
+
+export async function fetchEventsListPage(
+  config: RuntimeConfig,
+  args: FetchMarketsKeysetPageArgs
+): Promise<{ events: unknown[]; raw: unknown }> {
+  const url = buildEndpointUrl(config.gammaUrl, "/events");
+  url.searchParams.set("limit", String(Math.max(1, Math.min(1000, args.limit ?? 1000))));
+  url.searchParams.set("closed", String(args.closed ?? false));
+  url.searchParams.set("active", String(!(args.closed ?? false)));
+  url.searchParams.set("include_tag", String(args.includeTag ?? true));
+  url.searchParams.set("order", args.order ?? "volume24hr");
+  url.searchParams.set("ascending", String(args.ascending ?? false));
+  url.searchParams.set("offset", String(Math.max(0, args.offset ?? 0)));
+  if (args.liquidityNumMin !== undefined) {
+    url.searchParams.set("liquidity_num_min", String(args.liquidityNumMin));
+  }
+  if (args.volumeNumMin !== undefined) {
+    url.searchParams.set("volume_num_min", String(args.volumeNumMin));
+  }
+
+  const raw = await requestJson<unknown>(url);
+  const payload = parseKeysetPayload(raw);
+  return {
+    events: payload.items,
+    raw
+  };
+}
+
+export async function fetchAllEventsList(
+  config: RuntimeConfig,
+  args: IngestMarketUniverseArgs,
+  pools: Array<Pick<FetchMarketsKeysetPageArgs, "order" | "ascending" | "volumeNumMin">> = [
+    { order: "volume24hr", ascending: false },
+    { order: "createdAt", ascending: false },
+    { order: "endDate", ascending: true }
+  ]
+): Promise<{ events: unknown[]; pageCount: number; rawPages: unknown[] }> {
+  const rawPages: unknown[] = [];
+  const events: unknown[] = [];
+  const pageSize = Math.max(1, Math.min(1000, args.pageSize ?? 1000));
+  const limitPages = Math.max(1, args.limitPages ?? 1);
+
+  for (const pool of pools) {
+    for (let page = 0; page < limitPages; page += 1) {
+      const result = await fetchEventsListPage(config, {
+        limit: pageSize,
+        offset: page * pageSize,
+        closed: args.includeClosed ? undefined : false,
+        includeTag: args.includeTags,
+        liquidityNumMin: args.minLiquidityUsdc,
+        order: pool.order,
+        ascending: pool.ascending,
+        volumeNumMin: pool.volumeNumMin
+      });
+      rawPages.push(result.raw);
+      events.push(...result.events);
+      if (result.events.length < pageSize) {
+        break;
+      }
+    }
+  }
+
+  return { events, pageCount: rawPages.length, rawPages };
 }
 
 export function flattenEventsToUniverseMarkets(
@@ -2263,7 +2410,7 @@ export async function ingestUniverseMarkets(
   let rawMarkets: unknown[] = [];
   let pageCount = 0;
 
-  if (source === "markets_keyset" || source === "both") {
+  if (source === "markets_keyset" || source === "both" || source === "composite") {
     const result = await fetchAllMarketsKeyset(config, {
       ...args,
       includeClosed,
@@ -2279,7 +2426,21 @@ export async function ingestUniverseMarkets(
     pageCount += result.pageCount;
   }
 
-  if (source === "events_keyset" || source === "both") {
+  if (source === "gamma_markets" || source === "composite") {
+    const result = await fetchAllMarketsList(config, {
+      ...args,
+      includeClosed,
+      pageSize,
+      limitPages,
+      includeTags,
+      minLiquidityUsdc
+    });
+    rawMarkets = rawMarkets.concat(result.markets);
+    allRawPages.push(...result.rawPages);
+    pageCount += result.pageCount;
+  }
+
+  if (source === "events_keyset" || source === "both" || source === "composite") {
     const seenCursors = new Set<string>();
     const maxPages = Math.max(1, limitPages ?? Number.MAX_SAFE_INTEGER);
     let afterCursor: string | undefined;
@@ -2311,15 +2472,29 @@ export async function ingestUniverseMarkets(
     pageCount += eventPages;
   }
 
+  if (source === "gamma_events" || source === "composite") {
+    const result = await fetchAllEventsList(config, {
+      ...args,
+      includeClosed,
+      pageSize,
+      limitPages,
+      includeTags,
+      minLiquidityUsdc
+    });
+    rawEvents.push(...result.events);
+    allRawPages.push(...result.rawPages);
+    pageCount += result.pageCount;
+  }
+
   const normalizedFromMarkets = rawMarkets.map((market) =>
     normalizeUniverseMarketFromGammaMarket(market, {
-      source: "markets_keyset",
+      source: source === "gamma_markets" ? "gamma_markets" : source === "composite" ? "composite" : "markets_keyset",
       now,
       policies
     })
   );
   const normalizedFromEvents =
-    source === "events_keyset" || source === "both"
+    source === "events_keyset" || source === "gamma_events" || source === "both" || source === "composite"
       ? flattenEventsToUniverseMarkets(rawEvents, { now, policies })
       : [];
 

@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import type {
   StateStore,
   StoredAutoTradingDecisionRecord,
-  StoredAutoTradingSessionRecord
+  StoredAutoTradingSessionRecord,
+  StoredUniverseMarketInput
 } from "../../state-store/src/index.js";
 
 export type AutoTradingRiskProfile = "conservative" | "balanced" | "aggressive";
@@ -18,6 +19,8 @@ export interface AutoTradingMandateInput {
   mode?: AutoTradingMode;
   maxSingleOrderUsdc?: number;
   maxOpenPositions?: number;
+  maxEventPositions?: number;
+  maxEventExposureUsdc?: number;
   maxMarketHorizonHours?: number;
   minMarketHoursToEnd?: number;
   minLiquidityUsdc?: number;
@@ -134,6 +137,8 @@ export interface CompactAutoTradingIterationResult {
     | "timeframeHours"
     | "maxSingleOrderUsdc"
     | "maxOpenPositions"
+    | "maxEventPositions"
+    | "maxEventExposureUsdc"
     | "maxMarketHorizonHours"
     | "minLiquidityUsdc"
     | "maxSpreadCents"
@@ -142,9 +147,103 @@ export interface CompactAutoTradingIterationResult {
   candidates: CompactAutoTradingDecision[];
 }
 
+export interface AutoTradingSimulationMarket {
+  marketKey: string;
+  title: string;
+  prices: number[];
+  eventTitle?: string;
+  eventSlug?: string;
+  categoryGroup?: string;
+  structuralType?: string;
+  opportunityMode?: string;
+  endHoursFromStart?: number;
+  liquidityUsd?: number;
+  volume24hUsd?: number;
+  spreadCents?: number;
+  tradeOpportunityScore?: number;
+  researchPriorityScore?: number;
+  tradabilityScore?: number;
+  catalystScore?: number;
+  resolutionAmbiguityScore?: number;
+  riskScore?: number;
+  reasonCodes?: string[];
+  disqualifiers?: string[];
+}
+
+export interface AutoTradingSimulationInput {
+  mandate: AutoTradingMandateInput;
+  markets: AutoTradingSimulationMarket[];
+  startAt?: Date;
+  ticks?: number;
+  tickMinutes?: number;
+  limit?: number;
+}
+
+export interface AutoTradingSimulationFill {
+  tick: number;
+  filledAt: string;
+  marketKey: string;
+  title?: string;
+  price: number;
+  shares: number;
+  costUsdc: number;
+  decisionScore: number;
+}
+
+export interface AutoTradingSimulationPosition {
+  marketKey: string;
+  title?: string;
+  shares: number;
+  averagePrice: number;
+  costUsdc: number;
+  currentPrice: number;
+  currentValueUsdc: number;
+  unrealizedPnlUsdc: number;
+  unrealizedPnlPct: number;
+}
+
+export interface AutoTradingSimulationTick {
+  tick: number;
+  now: string;
+  runId: string;
+  sessionId: string;
+  proposedOrders: number;
+  blocked: number;
+  researchRequired: number;
+  fills: AutoTradingSimulationFill[];
+  cashUsdc: number;
+  positionValueUsdc: number;
+  portfolioValueUsdc: number;
+}
+
+export interface AutoTradingSimulationResult {
+  simulationId: string;
+  startedAt: string;
+  completedAt: string;
+  mandate: AutoTradingMandate;
+  sessionId: string;
+  summary: {
+    initialCashUsdc: number;
+    finalCashUsdc: number;
+    positionValueUsdc: number;
+    finalPortfolioValueUsdc: number;
+    totalSpentUsdc: number;
+    unrealizedPnlUsdc: number;
+    returnPct: number;
+    fillCount: number;
+    positionCount: number;
+    ticks: number;
+  };
+  ticks: AutoTradingSimulationTick[];
+  fills: AutoTradingSimulationFill[];
+  positions: AutoTradingSimulationPosition[];
+}
+
 interface RiskDefaults {
   maxSingleOrderBudgetFraction: number;
   maxOpenPositions: number;
+  maxEventPositions: number;
+  maxEventExposureBudgetFraction: number;
   maxMarketHorizonMultiplier: number;
   minMarketHoursToEnd: number;
   minLiquidityUsdc: number;
@@ -162,6 +261,8 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
   conservative: {
     maxSingleOrderBudgetFraction: 0.08,
     maxOpenPositions: 4,
+    maxEventPositions: 1,
+    maxEventExposureBudgetFraction: 0.12,
     maxMarketHorizonMultiplier: 1.25,
     minMarketHoursToEnd: 6,
     minLiquidityUsdc: 10_000,
@@ -177,6 +278,8 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
   balanced: {
     maxSingleOrderBudgetFraction: 0.12,
     maxOpenPositions: 6,
+    maxEventPositions: 1,
+    maxEventExposureBudgetFraction: 0.18,
     maxMarketHorizonMultiplier: 1.5,
     minMarketHoursToEnd: 2,
     minLiquidityUsdc: 5_000,
@@ -192,8 +295,10 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
   aggressive: {
     maxSingleOrderBudgetFraction: 0.18,
     maxOpenPositions: 10,
+    maxEventPositions: 1,
+    maxEventExposureBudgetFraction: 0.22,
     maxMarketHorizonMultiplier: 2,
-    minMarketHoursToEnd: 0.5,
+    minMarketHoursToEnd: 0.05,
     minLiquidityUsdc: 1_000,
     maxSpreadCents: 8,
     minTradabilityScore: 42,
@@ -209,6 +314,21 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
 function asNumber(value: unknown): number | undefined {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function roundMoney(value: number): number {
+  return Number(value.toFixed(4));
+}
+
+function roundShares(value: number): number {
+  return Number(value.toFixed(6));
+}
+
+function clampProbability(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+  return Math.max(0.001, Math.min(0.999, Number(value.toFixed(4))));
 }
 
 function asStringArray(value: unknown): string[] {
@@ -293,6 +413,11 @@ export function normalizeAutoTradingMandate(input: AutoTradingMandateInput): Aut
     mode: input.mode ?? "paper",
     maxSingleOrderUsdc,
     maxOpenPositions: Math.max(1, Math.min(50, input.maxOpenPositions ?? defaults.maxOpenPositions)),
+    maxEventPositions: Math.max(1, Math.min(10, input.maxEventPositions ?? defaults.maxEventPositions)),
+    maxEventExposureUsdc: Math.max(
+      1,
+      Math.min(budgetUsdc, input.maxEventExposureUsdc ?? budgetUsdc * defaults.maxEventExposureBudgetFraction)
+    ),
     maxMarketHorizonHours: Math.max(
       timeframeHours,
       input.maxMarketHorizonHours ?? timeframeHours * defaults.maxMarketHorizonMultiplier
@@ -407,6 +532,42 @@ function nextCheckForDecision(decision: AutoTradingDecision, mandate: AutoTradin
   return addMinutes(now, baseMinutes);
 }
 
+function eventIdentity(market: Record<string, unknown>): string {
+  for (const key of ["eventSlug", "eventId", "seriesSlug", "marketKey", "conditionId", "slug", "title"]) {
+    const value = market[key];
+    if (typeof value === "string" && value.trim()) {
+      return `${key}:${value}`;
+    }
+  }
+  return marketIdentity(market);
+}
+
+function marketIdentity(market: Record<string, unknown>): string {
+  for (const key of ["marketKey", "conditionId", "slug", "title"]) {
+    const value = market[key];
+    if (typeof value === "string" && value.trim()) {
+      return `${key}:${value}`;
+    }
+  }
+  return JSON.stringify(market);
+}
+
+function mergeMarketPools(pools: Array<Array<Record<string, unknown>>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const merged: Array<Record<string, unknown>> = [];
+  for (const pool of pools) {
+    for (const market of pool) {
+      const identity = marketIdentity(market);
+      if (seen.has(identity)) {
+        continue;
+      }
+      seen.add(identity);
+      merged.push(market);
+    }
+  }
+  return merged;
+}
+
 function createSession(store: StateStore, mandate: AutoTradingMandate, now: Date): StoredAutoTradingSessionRecord {
   return store.createAutoTradingSession({
     name: mandate.name,
@@ -422,6 +583,8 @@ function createSession(store: StateStore, mandate: AutoTradingMandate, now: Date
     constraints: {
       maxSingleOrderUsdc: mandate.maxSingleOrderUsdc,
       maxOpenPositions: mandate.maxOpenPositions,
+      maxEventPositions: mandate.maxEventPositions,
+      maxEventExposureUsdc: mandate.maxEventExposureUsdc,
       maxMarketHorizonHours: mandate.maxMarketHorizonHours,
       minLiquidityUsdc: mandate.minLiquidityUsdc,
       maxSpreadCents: mandate.maxSpreadCents,
@@ -508,6 +671,8 @@ export function compactAutoTradingIterationResult(
       timeframeHours: result.mandate.timeframeHours,
       maxSingleOrderUsdc: result.mandate.maxSingleOrderUsdc,
       maxOpenPositions: result.mandate.maxOpenPositions,
+      maxEventPositions: result.mandate.maxEventPositions,
+      maxEventExposureUsdc: result.mandate.maxEventExposureUsdc,
       maxMarketHorizonHours: result.mandate.maxMarketHorizonHours,
       minLiquidityUsdc: result.mandate.minLiquidityUsdc,
       maxSpreadCents: result.mandate.maxSpreadCents,
@@ -587,21 +752,38 @@ export function runAutoTradingIteration(
     };
   }
 
-  const rawMarkets = store.listUniverseMarkets({
+  const candidatePoolLimit = Math.max(250, limit * 20);
+  const baseUniverseFilters = {
     runId,
     minLiquidityUsdc: Math.max(0, mandate.minLiquidityUsdc * 0.5),
     maxSpreadCents: Math.max(mandate.maxSpreadCents, mandate.maxSpreadCents + 2),
-    sort: "trade_opportunity_desc",
-    limit: Math.max(250, limit * 20)
-  }).markets;
+    limit: candidatePoolLimit
+  } as const;
+  const rawMarkets = mergeMarketPools([
+    store.listUniverseMarkets({
+      ...baseUniverseFilters,
+      sort: "trade_opportunity_desc"
+    }).markets,
+    store.listUniverseMarkets({
+      ...baseUniverseFilters,
+      sort: "ending_soon"
+    }).markets,
+    store.listUniverseMarkets({
+      ...baseUniverseFilters,
+      sort: "volume_24h_desc"
+    }).markets
+  ]);
 
   let remainingBudget = mandate.budgetUsdc;
+  const eventExposureUsdc = new Map<string, number>();
+  const eventPositionCount = new Map<string, number>();
   const decisions: AutoTradingDecision[] = rawMarkets
     .map((market) => {
       const blockers = marketBlockers(market, mandate, now);
       const score = scoreMarket(market, mandate, now);
       const targetPrice = targetPriceForPassiveBuy(market);
       const tokenId = typeof market.yesTokenId === "string" ? market.yesTokenId : asStringArray(market.clobTokenIds).at(0);
+      const eventKey = eventIdentity(market);
       const reasonCodes = [
         ...asStringArray(market.reasonCodes),
         `risk_profile:${mandate.riskProfile}`,
@@ -616,11 +798,35 @@ export function runAutoTradingIteration(
         action = "skip";
         status = "blocked";
       } else if (score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold && targetPrice !== undefined && tokenId) {
-        action = "paper_buy_yes";
-        status = "proposed";
-        allocatedBudgetUsdc = Math.min(mandate.maxSingleOrderUsdc, remainingBudget);
-        shares = Number((allocatedBudgetUsdc / Math.max(0.001, targetPrice)).toFixed(4));
-        remainingBudget = Math.max(0, remainingBudget - allocatedBudgetUsdc);
+        if (remainingBudget <= 0) {
+          action = "monitor";
+          status = "watch";
+          blockers.push("budget_exhausted");
+        } else if ((eventPositionCount.get(eventKey) ?? 0) >= mandate.maxEventPositions) {
+          action = "monitor";
+          status = "watch";
+          blockers.push("event_position_cap_reached");
+        } else if ((eventExposureUsdc.get(eventKey) ?? 0) >= mandate.maxEventExposureUsdc) {
+          action = "monitor";
+          status = "watch";
+          blockers.push("event_exposure_cap_reached");
+        } else {
+          action = "paper_buy_yes";
+          status = "proposed";
+          const remainingEventBudget = Math.max(0, mandate.maxEventExposureUsdc - (eventExposureUsdc.get(eventKey) ?? 0));
+          allocatedBudgetUsdc = Math.min(mandate.maxSingleOrderUsdc, remainingBudget, remainingEventBudget);
+          if (allocatedBudgetUsdc <= 0) {
+            action = "monitor";
+            status = "watch";
+            allocatedBudgetUsdc = undefined;
+            blockers.push("event_exposure_cap_reached");
+          } else {
+            shares = Number((allocatedBudgetUsdc / Math.max(0.001, targetPrice)).toFixed(4));
+            remainingBudget = Math.max(0, remainingBudget - allocatedBudgetUsdc);
+            eventExposureUsdc.set(eventKey, (eventExposureUsdc.get(eventKey) ?? 0) + allocatedBudgetUsdc);
+            eventPositionCount.set(eventKey, (eventPositionCount.get(eventKey) ?? 0) + 1);
+          }
+        }
       } else {
         action = "research_required";
         status = "research";
@@ -718,5 +924,242 @@ export function runAutoTradingIteration(
     },
     decisions: stored,
     candidates: cappedDecisions
+  };
+}
+
+function simulationPrice(market: AutoTradingSimulationMarket, tick: number): number {
+  const price = market.prices[Math.min(tick, market.prices.length - 1)];
+  return clampProbability(price ?? market.prices.at(-1) ?? 0.5);
+}
+
+function simulationMarketToStoredInput(
+  runId: string,
+  market: AutoTradingSimulationMarket,
+  tick: number,
+  now: Date,
+  startAt: Date
+): StoredUniverseMarketInput {
+  const price = simulationPrice(market, tick);
+  const spreadCents = market.spreadCents ?? 1;
+  const halfSpread = spreadCents / 200;
+  const endHoursFromStart = market.endHoursFromStart ?? 24;
+  const endDate = new Date(startAt.getTime() + endHoursFromStart * 60 * 60 * 1000).toISOString();
+  const marketKeySuffix = market.marketKey.replace(/^condition:/, "");
+  return {
+    runId,
+    marketKey: market.marketKey,
+    conditionId: marketKeySuffix,
+    slug: marketKeySuffix,
+    eventTitle: market.eventTitle ?? "Synthetic simulation event",
+    eventSlug: market.eventSlug ?? "synthetic-simulation-event",
+    title: market.title,
+    tags: [market.categoryGroup ?? "simulation"],
+    outcomes: ["Yes", "No"],
+    outcomePrices: [price, roundMoney(1 - price)],
+    clobTokenIds: [`${market.marketKey}:yes`, `${market.marketKey}:no`],
+    yesTokenId: `${market.marketKey}:yes`,
+    noTokenId: `${market.marketKey}:no`,
+    active: true,
+    closed: false,
+    archived: false,
+    restricted: false,
+    acceptingOrders: true,
+    enableOrderBook: true,
+    startDate: startAt.toISOString(),
+    endDate,
+    createdAt: startAt.toISOString(),
+    updatedAt: now.toISOString(),
+    liquidityUsd: market.liquidityUsd ?? 50_000,
+    liquidityClobUsd: market.liquidityUsd ?? 50_000,
+    volume24hUsd: market.volume24hUsd ?? 10_000,
+    impliedProb: price,
+    lastTradePrice: price,
+    bestBid: clampProbability(price - halfSpread),
+    bestAsk: clampProbability(price + halfSpread),
+    midpoint: price,
+    spreadCents,
+    orderPriceMinTickSize: 0.001,
+    orderMinSize: 5,
+    negRisk: false,
+    structuralType: market.structuralType ?? "single-binary",
+    categoryGroup: market.categoryGroup ?? "simulation",
+    horizonBucket: endHoursFromStart <= 24 * 7 ? "short-0-7d" : "medium-31-120d",
+    priceBucket: price < 0.1 ? "longshot-0-10c" : price < 0.3 ? "cheap-10-30c" : "balanced-30-70c",
+    liquidityBucket: "tradable",
+    spreadBucket: spreadCents <= 1 ? "tight-0-1c" : "normal-1-3c",
+    opportunityMode: market.opportunityMode ?? "execution-ready",
+    modelabilityScore: 80,
+    tradabilityScore: market.tradabilityScore ?? 82,
+    catalystScore: market.catalystScore ?? 85,
+    resolutionAmbiguityScore: market.resolutionAmbiguityScore ?? 20,
+    attentionGapScore: 55,
+    crossMarketScore: 30,
+    researchPriorityScore: market.researchPriorityScore ?? 82,
+    tradeOpportunityScore: market.tradeOpportunityScore ?? 84,
+    makerScore: 55,
+    riskScore: market.riskScore ?? 18,
+    reasonCodes: market.reasonCodes ?? ["simulation_market", "defined_catalyst_window"],
+    disqualifiers: market.disqualifiers ?? [],
+    rawJson: {
+      simulation: true,
+      tick,
+      pricePath: market.prices
+    },
+    capturedAt: now.toISOString()
+  };
+}
+
+function markSimulationPositions(
+  positions: Map<string, { title?: string; shares: number; costUsdc: number }>,
+  markets: AutoTradingSimulationMarket[],
+  tick: number
+): AutoTradingSimulationPosition[] {
+  return Array.from(positions.entries()).map(([marketKey, position]) => {
+    const market = markets.find((candidate) => candidate.marketKey === marketKey);
+    const currentPrice = market ? simulationPrice(market, tick) : 0;
+    const currentValueUsdc = position.shares * currentPrice;
+    const averagePrice = position.costUsdc / Math.max(0.000001, position.shares);
+    const unrealizedPnlUsdc = currentValueUsdc - position.costUsdc;
+    return {
+      marketKey,
+      title: position.title,
+      shares: roundShares(position.shares),
+      averagePrice: roundMoney(averagePrice),
+      costUsdc: roundMoney(position.costUsdc),
+      currentPrice,
+      currentValueUsdc: roundMoney(currentValueUsdc),
+      unrealizedPnlUsdc: roundMoney(unrealizedPnlUsdc),
+      unrealizedPnlPct: roundMoney((unrealizedPnlUsdc / Math.max(0.000001, position.costUsdc)) * 100)
+    };
+  });
+}
+
+export function runAutoTradingSimulation(
+  store: StateStore,
+  input: AutoTradingSimulationInput
+): AutoTradingSimulationResult {
+  const simulationId = randomUUID();
+  const startAt = input.startAt ?? new Date();
+  const ticks = Math.max(1, Math.min(96, input.ticks ?? 4));
+  const tickMinutes = Math.max(1, Math.min(24 * 60, input.tickMinutes ?? 60));
+  const mandate = normalizeAutoTradingMandate(input.mandate);
+  const positions = new Map<string, { title?: string; shares: number; costUsdc: number }>();
+  const fills: AutoTradingSimulationFill[] = [];
+  const tickResults: AutoTradingSimulationTick[] = [];
+  let sessionId = "";
+  let cashUsdc = mandate.budgetUsdc;
+
+  for (let tick = 0; tick < ticks; tick += 1) {
+    const now = new Date(startAt.getTime() + tick * tickMinutes * 60 * 1000);
+    const runId = `simulation:${simulationId}:${tick}`;
+    store.startUniverseRun({
+      runId,
+      source: "simulation",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "running",
+      startedAt: now.toISOString(),
+      metadata: {
+        simulationId,
+        tick
+      }
+    });
+    store.recordUniverseMarkets(
+      runId,
+      input.markets.map((market) => simulationMarketToStoredInput(runId, market, tick, now, startAt))
+    );
+    store.completeUniverseRun(runId, {
+      status: "completed",
+      completedAt: now.toISOString(),
+      totalEvents: 1,
+      totalMarkets: input.markets.length,
+      enrichedMarkets: 0
+    });
+
+    const iteration = runAutoTradingIteration(store, {
+      sessionId: sessionId || undefined,
+      mandate: sessionId ? undefined : mandate,
+      now,
+      limit: input.limit ?? mandate.maxOpenPositions * 2
+    });
+    sessionId = iteration.session.sessionId;
+
+    const tickFills: AutoTradingSimulationFill[] = [];
+    for (const decision of iteration.candidates) {
+      if (decision.action !== "paper_buy_yes" || !decision.marketKey || !decision.targetPrice || cashUsdc <= 0) {
+        continue;
+      }
+      const requestedCost = decision.allocatedBudgetUsdc ?? 0;
+      const costUsdc = Math.min(cashUsdc, requestedCost);
+      if (costUsdc <= 0) {
+        continue;
+      }
+      const shares = costUsdc / decision.targetPrice;
+      const existing = positions.get(decision.marketKey) ?? {
+        title: decision.title,
+        shares: 0,
+        costUsdc: 0
+      };
+      existing.shares += shares;
+      existing.costUsdc += costUsdc;
+      positions.set(decision.marketKey, existing);
+      cashUsdc = Math.max(0, cashUsdc - costUsdc);
+      const fill = {
+        tick,
+        filledAt: now.toISOString(),
+        marketKey: decision.marketKey,
+        title: decision.title,
+        price: decision.targetPrice,
+        shares: roundShares(shares),
+        costUsdc: roundMoney(costUsdc),
+        decisionScore: decision.score
+      } satisfies AutoTradingSimulationFill;
+      fills.push(fill);
+      tickFills.push(fill);
+    }
+
+    const markedPositions = markSimulationPositions(positions, input.markets, tick);
+    const positionValueUsdc = markedPositions.reduce((sum, position) => sum + position.currentValueUsdc, 0);
+    tickResults.push({
+      tick,
+      now: now.toISOString(),
+      runId,
+      sessionId,
+      proposedOrders: iteration.summary.proposedOrders,
+      blocked: iteration.summary.blocked,
+      researchRequired: iteration.summary.researchRequired,
+      fills: tickFills,
+      cashUsdc: roundMoney(cashUsdc),
+      positionValueUsdc: roundMoney(positionValueUsdc),
+      portfolioValueUsdc: roundMoney(cashUsdc + positionValueUsdc)
+    });
+  }
+
+  const positionsList = markSimulationPositions(positions, input.markets, ticks - 1);
+  const positionValueUsdc = positionsList.reduce((sum, position) => sum + position.currentValueUsdc, 0);
+  const totalSpentUsdc = fills.reduce((sum, fill) => sum + fill.costUsdc, 0);
+  const finalPortfolioValueUsdc = cashUsdc + positionValueUsdc;
+  const unrealizedPnlUsdc = finalPortfolioValueUsdc - mandate.budgetUsdc;
+  return {
+    simulationId,
+    startedAt: startAt.toISOString(),
+    completedAt: new Date(startAt.getTime() + (ticks - 1) * tickMinutes * 60 * 1000).toISOString(),
+    mandate,
+    sessionId,
+    summary: {
+      initialCashUsdc: roundMoney(mandate.budgetUsdc),
+      finalCashUsdc: roundMoney(cashUsdc),
+      positionValueUsdc: roundMoney(positionValueUsdc),
+      finalPortfolioValueUsdc: roundMoney(finalPortfolioValueUsdc),
+      totalSpentUsdc: roundMoney(totalSpentUsdc),
+      unrealizedPnlUsdc: roundMoney(unrealizedPnlUsdc),
+      returnPct: roundMoney((unrealizedPnlUsdc / Math.max(0.000001, mandate.budgetUsdc)) * 100),
+      fillCount: fills.length,
+      positionCount: positionsList.length,
+      ticks
+    },
+    ticks: tickResults,
+    fills,
+    positions: positionsList
   };
 }

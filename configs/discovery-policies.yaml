@@ -2,7 +2,7 @@ version: 1
 
 defaults:
   page_size: 1000
-  source: markets_keyset
+  source: composite
   include_tags: true
   active_only: true
   include_closed: false

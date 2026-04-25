@@ -72,6 +72,24 @@ Return compact JSON for agent-facing dry runs:
 npm run autotrader:once -- --session-id <session-id> --json --compact
 ```
 
+## Offline simulation
+
+Use `autotrader:simulate` to test the autonomous loop without live APIs, credentials, or real orders. It creates a temporary SQLite database, seeds synthetic universe snapshots over several ticks, runs the planner each tick, simulates paper fills from proposed `paper_buy_yes` decisions, and marks positions to the synthetic price path.
+
+```bash
+npm run autotrader:simulate -- --budget-usdc 50 --timeframe-hours 24 --risk-profile balanced
+```
+
+Return full simulation JSON:
+
+```bash
+node --import tsx ./scripts/autotrader-simulation.ts --budget-usdc 50 --timeframe-hours 24 --risk-profile balanced --ticks 4 --tick-minutes 360 --json
+```
+
+In this Windows development environment, use the direct `node --import tsx` form when passing custom flags; the local npm wrapper can drop forwarded arguments.
+
+The simulation is deterministic and intentionally conservative as a test harness. It is not a backtest against historical Polymarket order books, and its paper fills assume proposed passive orders get filled at the planner target price.
+
 ## MCP tools
 
 - `start_auto_trading_session`

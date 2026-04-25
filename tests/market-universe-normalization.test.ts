@@ -178,3 +178,115 @@ test("normalizeUniverseMarketFromGammaMarket does not match short keywords insid
   );
   assert.equal(tech.categoryGroup, "tech");
 });
+
+test("active restricted Gamma markets remain discovery candidates", () => {
+  const market = normalizeUniverseMarketFromGammaMarket(
+    {
+      id: "2012793",
+      question: "Lakers vs. Rockets",
+      slug: "nba-lal-hou-2026-04-24",
+      outcomes: "[\"Lakers\",\"Rockets\"]",
+      outcomePrices: "[\"0.34\",\"0.66\"]",
+      clobTokenIds: "[\"lakers-token\",\"rockets-token\"]",
+      active: true,
+      closed: false,
+      restricted: true,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      liquidityNum: "979950.6137",
+      volume24hr: "3202860.4537",
+      endDate: "2026-04-25T00:00:00Z"
+    },
+    { now: new Date("2026-04-24T20:00:00Z") }
+  );
+
+  assert.equal(market.categoryGroup, "sports");
+  assert.equal(market.structuralType, "live-sports");
+  assert.equal(market.horizonBucket, "resolves-today");
+  assert.equal(market.restricted, true);
+  assert.ok(market.reasonCodes.includes("restricted_flag_present"));
+  assert.equal(market.disqualifiers.includes("inactive_or_restricted"), false);
+  assert.equal(market.disqualifiers.includes("inactive_or_not_accepting_orders"), false);
+  assert.notEqual(market.opportunityMode, "avoid");
+});
+
+test("stale active Gamma records are not classified as short-horizon candidates", () => {
+  const market = normalizeUniverseMarketFromGammaMarket(
+    {
+      question: "Old active-but-stale market",
+      outcomes: "[\"Yes\",\"No\"]",
+      outcomePrices: "[\"0.50\",\"0.50\"]",
+      clobTokenIds: "[\"yes\",\"no\"]",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      liquidityNum: "50000",
+      endDate: "2025-11-23T00:00:00Z"
+    },
+    { now: new Date("2026-04-24T20:00:00Z") }
+  );
+
+  assert.equal(market.horizonBucket, "unknown");
+  assert.ok(market.disqualifiers.includes("market_already_ended"));
+  assert.equal(market.opportunityMode, "avoid");
+});
+
+test("crypto up/down markets are categorized and structured for short-horizon discovery", () => {
+  const market = normalizeUniverseMarketFromGammaMarket(
+    {
+      question: "Bitcoin Up or Down - April 24, 7:25PM-7:30PM ET",
+      slug: "btc-updown-5m-1777073100",
+      outcomes: "[\"Up\",\"Down\"]",
+      outcomePrices: "[\"0.505\",\"0.495\"]",
+      clobTokenIds: "[\"up-token\",\"down-token\"]",
+      active: true,
+      closed: false,
+      restricted: true,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      liquidityNum: "25012.5344",
+      volume24hr: "490.907",
+      endDate: "2026-04-24T23:30:00Z"
+    },
+    { now: new Date("2026-04-24T23:20:00Z") }
+  );
+
+  assert.equal(market.categoryGroup, "crypto");
+  assert.equal(market.structuralType, "threshold-range");
+  assert.equal(market.horizonBucket, "resolves-today");
+  assert.equal(market.impliedProb, 0.505);
+  assert.equal(market.disqualifiers.includes("inactive_or_restricted"), false);
+});
+
+test("finance threshold markets with eventStartTime are not misclassified as live sports", () => {
+  const market = normalizeUniverseMarketFromGammaMarket(
+    {
+      question: "Will WTI Crude Oil (WTI) hit (HIGH) $120 in April?",
+      slug: "will-wti-crude-oil-wti-hit-high-120-in-april",
+      outcomes: "[\"Yes\",\"No\"]",
+      outcomePrices: "[\"0.0595\",\"0.9405\"]",
+      clobTokenIds: "[\"yes-token\",\"no-token\"]",
+      active: true,
+      closed: false,
+      restricted: true,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      liquidityNum: "150850.04998",
+      volume24hr: "199523.637107",
+      endDate: "2026-04-30T00:00:00Z",
+      eventStartTime: "2026-03-25T04:01:18.598Z",
+      tags: [{ slug: "finance" }, { slug: "hit-price" }, { slug: "commodities" }, { slug: "oil" }]
+    },
+    {
+      rawEvent: {
+        title: "What will WTI Crude Oil (WTI) hit in April 2026?",
+        tags: [{ slug: "finance" }, { slug: "finance-updown" }]
+      },
+      now: new Date("2026-04-24T23:20:00Z")
+    }
+  );
+
+  assert.equal(market.categoryGroup, "finance");
+  assert.equal(market.structuralType, "threshold-range");
+});

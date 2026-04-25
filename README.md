@@ -114,6 +114,18 @@ npm run autotrader:once -- --budget-usdc 50 --timeframe-hours 72 --risk-profile 
 
 Use `--json --compact` for short agent-facing dry-run output.
 
+Use `autotrader:simulate` for an offline synthetic replay that runs multiple paper-planning ticks, simulates fills, and reports marked paper PnL.
+
+```bash
+npm run autotrader:simulate -- --budget-usdc 50 --timeframe-hours 24 --risk-profile balanced
+```
+
+For custom flags in this Windows development environment, prefer:
+
+```bash
+node --import tsx ./scripts/autotrader-simulation.ts --budget-usdc 50 --timeframe-hours 24 --risk-profile balanced --ticks 4 --tick-minutes 360
+```
+
 This is paper-only. It does not call live order submission.
 
 ## MCP Tool Surface

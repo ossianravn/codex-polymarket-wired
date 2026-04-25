@@ -5,7 +5,8 @@ import {
   ingestUniverseMarkets,
   loadDiscoveryPolicies,
   normalizeUniverseMarketForStorage,
-  type UniverseMarket
+  type UniverseMarket,
+  type UniverseSource
 } from "../packages/market-universe/src/index.js";
 import { loadRuntimeConfig } from "../packages/polymarket-core/src/index.js";
 import {
@@ -149,7 +150,7 @@ async function main(): Promise<void> {
   const result = await ingestUniverseMarkets(
     config,
     {
-      source: "markets_keyset",
+      source: (firstString(args.source) as UniverseSource | undefined) ?? policies.defaults.source,
       pageSize: asNumber(args["page-size"]) ?? policies.defaults.pageSize,
       limitPages: asNumber(args["limit-pages"]),
       minLiquidityUsdc: asNumber(args["min-liquidity-usdc"]) ?? policies.defaults.minLiquidityUsdc,

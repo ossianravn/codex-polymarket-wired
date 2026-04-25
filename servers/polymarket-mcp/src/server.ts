@@ -46,7 +46,8 @@ import {
   type CandidateProfile,
   type DiscoveryPolicies,
   type ListUniverseFilters,
-  type UniverseMarket
+  type UniverseMarket,
+  type UniverseSource
 } from "../../../packages/market-universe/src/index.js";
 import {
   computePolicyHash,
@@ -1050,7 +1051,7 @@ export async function ingestAndPersistUniverseRun(
   input: {
     active_only?: boolean;
     include_closed?: boolean;
-    source?: "markets_keyset" | "events_keyset" | "both";
+    source?: UniverseSource;
     page_size?: number;
     limit_pages?: number;
     min_liquidity_usdc?: number;
@@ -1599,7 +1600,7 @@ server.registerTool(
     inputSchema: {
       active_only: z.boolean().default(true),
       include_closed: z.boolean().default(false),
-      source: z.enum(["markets_keyset", "events_keyset", "both"]).default("markets_keyset"),
+      source: z.enum(["markets_keyset", "events_keyset", "gamma_markets", "gamma_events", "composite", "both"]).default("composite"),
       page_size: z.number().int().min(1).max(1000).default(1000),
       limit_pages: z.number().int().min(1).max(1000).optional(),
       min_liquidity_usdc: z.number().min(0).optional(),
