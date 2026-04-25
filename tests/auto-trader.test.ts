@@ -554,6 +554,85 @@ test("auto-trader records missed paper orders without spending ledger budget", a
   });
 });
 
+test("auto-trader blocks stale market snapshots before creating paper orders", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:stale-snapshot",
+      conditionId: "stale-snapshot",
+      slug: "stale-snapshot",
+      eventSlug: "stale-snapshot-event",
+      eventTitle: "Stale snapshot event",
+      title: "Stale snapshot market",
+      category: "sports",
+      tags: ["sports"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.4, 0.6],
+      clobTokenIds: ["stale-yes", "stale-no"],
+      yesTokenId: "stale-yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 40_000,
+      volume24hUsd: 90_000,
+      impliedProb: 0.4,
+      bestBid: 0.4,
+      bestAsk: 0.41,
+      midpoint: 0.405,
+      spreadCents: 1,
+      categoryGroup: "sports",
+      structuralType: "live-sports",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: 82,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 82,
+      tradeOpportunityScore: 92,
+      makerScore: 50,
+      riskScore: 15,
+      capturedAt: new Date(now.getTime() - 31 * 60 * 1000).toISOString(),
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: independentForecastRawJson(0.4)
+    }]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 6
+      }
+    });
+
+    assert.equal(result.summary.proposedOrders, 0);
+    assert.equal(result.ledger.orders?.length ?? 0, 0);
+    assert.equal(result.candidates[0]?.action, "skip");
+    assert.ok(result.candidates[0]?.blockers.includes("stale_market_snapshot"));
+  });
+});
+
 test("state store resets paper ledger while keeping decision history unless requested", async () => {
   await withTempStore((store) => {
     const session = store.createAutoTradingSession({

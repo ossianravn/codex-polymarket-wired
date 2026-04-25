@@ -1157,10 +1157,14 @@ export function normalizeAutoTradingMandate(input: AutoTradingMandateInput): Aut
 function marketBlockers(market: Record<string, unknown>, mandate: AutoTradingMandate, now: Date): string[] {
   const blockers: string[] = [];
   const hoursToEnd = hoursBetween(now, market.endDate);
+  const snapshotMs = marketTimestampMs(market);
   const categoryGroup = typeof market.categoryGroup === "string" ? market.categoryGroup : undefined;
   const opportunityMode = typeof market.opportunityMode === "string" ? market.opportunityMode : undefined;
   const impliedProb = asNumber(market.impliedProb);
 
+  if (snapshotMs !== undefined && now.getTime() - snapshotMs > 30 * 60 * 1000) {
+    blockers.push("stale_market_snapshot");
+  }
   if (market.active === false || market.closed === true || market.acceptingOrders === false) {
     blockers.push("market_not_tradeable");
   }
