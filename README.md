@@ -128,6 +128,8 @@ node --import tsx ./scripts/autotrader-simulation.ts --budget-usdc 50 --timefram
 
 This is paper-only. It does not call live order submission.
 
+Entry proposals now require `rawJson.independentForecast` on the universe market before the planner compares fair value to venue price. Missing, stale, unsealed, price-contaminated, numerically unsupported, or low-edge forecasts are downgraded to `research_required` rather than becoming paper fills or live previews.
+
 For live modes, decisions become mode-aware:
 
 - `live_guarded` emits live decisions that can be converted into guarded previews, but the execution gate reports that explicit approval is required after preview.

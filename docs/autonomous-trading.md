@@ -102,6 +102,26 @@ In this Windows development environment, use the direct `node --import tsx` form
 
 The simulation is deterministic and intentionally conservative as a test harness. It is not a backtest against historical Polymarket order books, and its paper fills assume proposed passive orders get filled at the planner target price.
 
+## Independent forecast gate
+
+Entry proposals require an independent fair-value artifact before the planner compares against venue price. The artifact lives at `market.rawJson.independentForecast` and must be sealed before it can unlock `paper_buy_yes` or live buy decisions:
+
+```json
+{
+  "independentForecast": {
+    "sealed": true,
+    "probability": 0.58,
+    "uncertainty": 0.03,
+    "forecastedAt": "2026-04-25T12:00:00.000Z",
+    "expiresAt": "2026-04-26T12:00:00.000Z",
+    "numericalChecks": ["base-rate and timeline feasibility check"],
+    "usesVenuePrice": false
+  }
+}
+```
+
+The auto-trader blocks entry candidates as `research_required` when the forecast is missing, unsealed, stale, expired, contaminated by venue price, lacks numerical checks, or has insufficient uncertainty-adjusted edge. Venue price, spread, and orderbook data are used only after this artifact exists, and only for edge and execution checks.
+
 ## live execution modes
 
 The session mode controls execution:

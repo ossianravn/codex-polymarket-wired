@@ -28,6 +28,31 @@ function isoAfter(now: Date, hours: number): string {
   return new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
 }
 
+function independentForecastRawJson(
+  price: number,
+  input: {
+    probability?: number;
+    uncertainty?: number;
+    forecastedAt?: string;
+    expiresAt?: string;
+    sealed?: boolean;
+    usesVenuePrice?: boolean;
+    numericalChecks?: string[];
+  } = {}
+): Record<string, unknown> {
+  return {
+    independentForecast: {
+      sealed: input.sealed ?? true,
+      probability: input.probability ?? Number(Math.min(0.98, price + 0.18).toFixed(4)),
+      uncertainty: input.uncertainty ?? 0.02,
+      forecastedAt: input.forecastedAt ?? "2026-04-24T00:00:00.000Z",
+      expiresAt: input.expiresAt ?? "2026-04-30T00:00:00.000Z",
+      numericalChecks: input.numericalChecks ?? ["fixture_base_rate_check"],
+      usesVenuePrice: input.usesVenuePrice ?? false
+    }
+  };
+}
+
 test("auto-trader creates paper session and filters markets by mandate timeframe", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");
@@ -93,7 +118,7 @@ test("auto-trader creates paper session and filters markets by mandate timeframe
       riskScore: 18,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(input.price)
     });
 
     store.recordUniverseMarkets(runId, [
@@ -132,6 +157,84 @@ test("auto-trader creates paper session and filters markets by mandate timeframe
     const decisions = store.listAutoTradingDecisions({ sessionId: result.session.sessionId, limit: 20 });
     assert.equal(decisions.length, result.candidates.length);
     assert.equal(decisions.find((decision) => decision.marketKey === "condition:short-clean")?.action, "paper_buy_yes");
+  });
+});
+
+test("auto-trader blocks heuristic-only entries until independent fair value exists", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "markets_keyset",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:heuristic-only",
+      conditionId: "heuristic-only",
+      slug: "heuristic-only",
+      title: "High-scoring market without independent forecast",
+      category: "politics",
+      tags: ["politics"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.42, 0.58],
+      clobTokenIds: ["condition:heuristic-only:yes", "condition:heuristic-only:no"],
+      yesTokenId: "condition:heuristic-only:yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 10_000,
+      impliedProb: 0.42,
+      bestBid: 0.42,
+      bestAsk: 0.44,
+      midpoint: 0.43,
+      spreadCents: 2,
+      categoryGroup: "politics",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "execution-ready",
+      modelabilityScore: 85,
+      tradabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 70,
+      crossMarketScore: 30,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: 95,
+      makerScore: 50,
+      riskScore: 10,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: {}
+    }]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+
+    const decision = result.candidates.find((candidate) => candidate.marketKey === "condition:heuristic-only");
+    assert.equal(decision?.action, "research_required");
+    assert.equal(decision?.status, "research");
+    assert.equal(decision?.blockers.includes("missing_independent_forecast"), true);
+    assert.equal(result.summary.proposedOrders, 0);
+    assert.equal(result.ledger.fills.length, 0);
   });
 });
 
@@ -189,7 +292,7 @@ test("auto-trader persists paper fills and spends from ledger on later iteration
       riskScore: 15,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(input.price)
     });
 
     const runId1 = store.startUniverseRun({
@@ -302,7 +405,7 @@ test("auto-trader exits paper positions on take profit and realizes PnL", async 
       riskScore: 15,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(price)
     });
 
     const runId1 = store.startUniverseRun({
@@ -409,7 +512,7 @@ test("auto-trader waits through stop-loss grace before exiting fresh paper posit
       riskScore: 15,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {},
+      rawJson: independentForecastRawJson(price, { forecastedAt: capturedAt.toISOString() }),
       capturedAt: capturedAt.toISOString()
     });
 
@@ -561,7 +664,7 @@ test("auto-trader blocks new paper buys after session stop loss", async () => {
       riskScore: 15,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(input.price)
     });
 
     const runId1 = store.startUniverseRun({
@@ -682,7 +785,7 @@ test("auto-trader allocates limited budget by final decision score, not raw univ
       riskScore: input.riskScore,
       reasonCodes: ["clear_resolution_text"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.5)
     });
     store.recordUniverseMarkets(runId, [
       market({
@@ -780,7 +883,7 @@ test("auto-trader leaves sub-minimum leftover budget idle instead of creating du
       riskScore: 10,
       reasonCodes: ["clear_resolution_text"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.5)
     });
     store.recordUniverseMarkets(runId, [
       market({ key: "condition:first-full-order", eventSlug: "first-event", tradeScore: 95 }),
@@ -877,7 +980,7 @@ test("auto-trader exits legacy dust paper positions during hygiene cleanup", asy
       riskScore: 10,
       reasonCodes: ["clear_resolution_text"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.5)
     }]);
 
     store.recordPaperTradingFill({
@@ -967,7 +1070,7 @@ test("auto-trader rotates paper budget by exiting weak positions for stronger ca
       riskScore: 15,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.5)
     });
 
     const runId1 = store.startUniverseRun({
@@ -1096,7 +1199,7 @@ test("auto-trader rotates same-event paper exposure when a stronger candidate is
       riskScore: 15,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(input.price)
     });
 
     const runId1 = store.startUniverseRun({
@@ -1239,7 +1342,7 @@ test("auto-trader uses live actions and gates live guarded previews behind appro
       riskScore: 15,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.42)
     }]);
 
     const result = runAutoTradingIteration(store, {
@@ -1460,7 +1563,7 @@ test("auto-trader includes ending-soon markets beyond the top opportunity pool",
       riskScore: 18,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.24)
     });
 
     store.recordUniverseMarkets(runId, [
@@ -1558,7 +1661,7 @@ test("auto-trader pages past stale ending-soon rows to find eligible same-day ma
       riskScore: 18,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.24)
     });
 
     store.recordUniverseMarkets(runId, [
@@ -1652,7 +1755,7 @@ test("aggressive auto-trader can propose very short-horizon volatile markets", a
       riskScore: 20,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.505)
     }]);
 
     const result = runAutoTradingIteration(store, {
@@ -1734,7 +1837,7 @@ test("auto-trader caps correlated exposure by event before allocating elsewhere"
       riskScore: 20,
       reasonCodes: ["defined_catalyst_window"],
       disqualifiers: [],
-      rawJson: {}
+      rawJson: independentForecastRawJson(0.4)
     });
 
     store.recordUniverseMarkets(runId, [

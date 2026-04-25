@@ -74,6 +74,19 @@ export interface AutoTradingDecision {
   reasonCodes: string[];
   blockers: string[];
   market: Record<string, unknown>;
+  forecastEdge?: AutoTradingForecastEdge;
+}
+
+export interface AutoTradingForecastEdge {
+  fairProbability: number;
+  executionPrice: number;
+  uncertainty: number;
+  spreadPenalty: number;
+  rawEdge: number;
+  adjustedEdge: number;
+  minRequiredEdge: number;
+  forecastedAt?: string;
+  expiresAt?: string;
 }
 
 export interface AutoTradingIterationResult {
@@ -146,6 +159,7 @@ export interface CompactAutoTradingDecision {
   nextCheckAt?: string;
   reasonCodes: string[];
   blockers: string[];
+  forecastEdge?: AutoTradingForecastEdge;
   market?: {
     eventTitle?: string;
     eventSlug?: string;
@@ -457,6 +471,12 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -500,6 +520,122 @@ function targetPriceForPassiveBuy(market: Record<string, unknown>): number | und
     return undefined;
   }
   return Math.max(0.001, Math.min(0.99, Number(raw.toFixed(4))));
+}
+
+function minForecastEdgeForRiskProfile(riskProfile: AutoTradingRiskProfile): number {
+  switch (riskProfile) {
+    case "aggressive":
+      return 0.02;
+    case "balanced":
+      return 0.04;
+    case "conservative":
+      return 0.06;
+  }
+}
+
+function probabilityFromForecast(value: unknown): number | undefined {
+  const numeric = asNumber(value);
+  if (numeric === undefined) {
+    return undefined;
+  }
+  const probability = numeric > 1 ? numeric / 100 : numeric;
+  return probability > 0 && probability < 1 ? Number(probability.toFixed(4)) : undefined;
+}
+
+function uncertaintyFromForecast(forecast: Record<string, unknown>): number {
+  const raw =
+    asNumber(forecast.uncertaintyProbability) ??
+    asNumber(forecast.uncertainty) ??
+    asNumber(forecast.uncertaintyPct) ??
+    0;
+  const uncertainty = raw > 1 ? raw / 100 : raw;
+  return Math.max(0, Math.min(0.5, Number(uncertainty.toFixed(4))));
+}
+
+function independentForecastArtifact(market: Record<string, unknown>): Record<string, unknown> | undefined {
+  const rawJson = asRecord(market.rawJson);
+  return asRecord(rawJson?.independentForecast);
+}
+
+function evaluateIndependentForecastEdge(
+  market: Record<string, unknown>,
+  executionPrice: number,
+  mandate: AutoTradingMandate,
+  now: Date
+): { edge?: AutoTradingForecastEdge; blockers: string[]; reasonCodes: string[] } {
+  const blockers: string[] = [];
+  const reasonCodes: string[] = [];
+  const forecast = independentForecastArtifact(market);
+  if (!forecast) {
+    return {
+      blockers: ["missing_independent_forecast"],
+      reasonCodes: ["forecast_required_before_price_comparison"]
+    };
+  }
+
+  const fairProbability = probabilityFromForecast(forecast.probability ?? forecast.fairProbability ?? forecast.pYes);
+  if (fairProbability === undefined) {
+    blockers.push("invalid_independent_forecast_probability");
+  }
+  if (forecast.sealed !== true) {
+    blockers.push("independent_forecast_not_sealed");
+  }
+  if (forecast.usesVenuePrice === true || forecast.usesMarketPrice === true || forecast.priceContaminated === true) {
+    blockers.push("independent_forecast_price_contaminated");
+  }
+  if (asStringArray(forecast.numericalChecks).length === 0) {
+    blockers.push("independent_forecast_missing_numerical_check");
+  }
+
+  const forecastedAt = optionalString(forecast.forecastedAt);
+  if (!forecastedAt || !Number.isFinite(Date.parse(forecastedAt))) {
+    blockers.push("independent_forecast_missing_forecasted_at");
+  } else {
+    const ageHours = (now.getTime() - Date.parse(forecastedAt)) / (1000 * 60 * 60);
+    if (ageHours < -0.01) {
+      blockers.push("independent_forecast_from_future");
+    }
+    if (ageHours > Math.max(24, mandate.timeframeHours)) {
+      blockers.push("independent_forecast_stale");
+    }
+  }
+
+  const expiresAt = optionalString(forecast.expiresAt);
+  if (expiresAt && Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= now.getTime()) {
+    blockers.push("independent_forecast_expired");
+  }
+
+  if (fairProbability === undefined) {
+    return { blockers, reasonCodes };
+  }
+
+  const uncertainty = uncertaintyFromForecast(forecast);
+  const spreadPenalty = Math.max(0, (asNumber(market.spreadCents) ?? 0) / 100);
+  const rawEdge = Number((fairProbability - executionPrice).toFixed(4));
+  const adjustedEdge = Number((rawEdge - uncertainty - spreadPenalty).toFixed(4));
+  const minRequiredEdge = minForecastEdgeForRiskProfile(mandate.riskProfile);
+  const edge = {
+    fairProbability,
+    executionPrice,
+    uncertainty,
+    spreadPenalty,
+    rawEdge,
+    adjustedEdge,
+    minRequiredEdge,
+    forecastedAt,
+    expiresAt
+  } satisfies AutoTradingForecastEdge;
+
+  reasonCodes.push(
+    `fair_probability:${fairProbability}`,
+    `adjusted_edge:${adjustedEdge}`,
+    `min_edge:${minRequiredEdge}`
+  );
+  if (adjustedEdge < minRequiredEdge) {
+    blockers.push("forecast_edge_below_minimum");
+  }
+
+  return { edge, blockers, reasonCodes };
 }
 
 function horizonFitScore(hoursToEnd: number | undefined, mandate: AutoTradingMandate): number {
@@ -1206,6 +1342,7 @@ export function compactAutoTradingDecision(decision: AutoTradingDecision): Compa
     nextCheckAt: decision.nextCheckAt,
     reasonCodes: decision.reasonCodes,
     blockers: decision.blockers,
+    forecastEdge: decision.forecastEdge,
     market: Object.keys(decision.market).length > 0
       ? {
         eventTitle: optionalString(decision.market.eventTitle),
@@ -1466,8 +1603,12 @@ export function runAutoTradingIteration(
       const tokenId = typeof market.yesTokenId === "string" ? market.yesTokenId : asStringArray(market.clobTokenIds).at(0);
       const eventKey = eventIdentity(market);
       const reentryBlocker = recentPaperReentryBlocker(market, ledger, mandate, now);
+      const forecastGate = targetPrice === undefined
+        ? { blockers: [] as string[], reasonCodes: [] as string[], edge: undefined }
+        : evaluateIndependentForecastEdge(market, targetPrice, mandate, now);
       const reasonCodes = [
         ...asStringArray(market.reasonCodes),
+        ...forecastGate.reasonCodes,
         `risk_profile:${mandate.riskProfile}`,
         `mode:${mandate.mode}`
       ];
@@ -1480,7 +1621,11 @@ export function runAutoTradingIteration(
         action = "skip";
         status = "blocked";
       } else if (score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold && targetPrice !== undefined && tokenId) {
-        if (reentryBlocker) {
+        if (forecastGate.blockers.length > 0) {
+          action = "research_required";
+          status = "research";
+          blockers.push(...forecastGate.blockers);
+        } else if (reentryBlocker) {
           action = "monitor";
           status = "watch";
           blockers.push(reentryBlocker);
@@ -1539,7 +1684,8 @@ export function runAutoTradingIteration(
         tokenId,
         reasonCodes,
         blockers,
-        market
+        market,
+        forecastEdge: forecastGate.edge
       } satisfies AutoTradingDecision;
       return {
         ...decision,
@@ -1641,6 +1787,7 @@ export function runAutoTradingIteration(
         shares: decision.shares,
         mode: mandate.mode,
         liveSubmissionEnabled: false,
+        forecastEdge: decision.forecastEdge,
         market: decision.market
       }
     }))
@@ -1672,6 +1819,7 @@ export function runAutoTradingIteration(
             tokenId: decision.tokenId,
             score: decision.score,
             mode: mandate.mode,
+            forecastEdge: decision.forecastEdge,
             endDate: decision.market.endDate
           }
         });
@@ -1833,7 +1981,16 @@ function simulationMarketToStoredInput(
     rawJson: {
       simulation: true,
       tick,
-      pricePath: market.prices
+      pricePath: market.prices,
+      independentForecast: {
+        sealed: true,
+        probability: clampProbability(price + 0.12),
+        uncertainty: 0.02,
+        forecastedAt: now.toISOString(),
+        expiresAt: endDate,
+        numericalChecks: ["synthetic_simulation_fixture"],
+        usesVenuePrice: false
+      }
     },
     capturedAt: now.toISOString()
   };
