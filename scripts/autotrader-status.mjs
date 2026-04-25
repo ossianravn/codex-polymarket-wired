@@ -105,6 +105,7 @@ function renderText(status) {
     `Autotrader status: ${latest.noSubmitInvariantHeld ? "safe-no-submit" : "SAFETY VIOLATION"}`,
     `Generated: ${latest.generatedAt}`,
     `Session: ${latest.sessionId ?? "unknown"}${latest.startedThisRun ? " (started this run)" : ""}`,
+    `Scheduler: ${latest.schedulerSkipped ? `deferred (${latest.schedulerReason ?? "not_due"}, due in ${latest.schedulerDueInSeconds ?? "unknown"}s)` : (latest.schedulerReason ?? "ran")}`,
     `Material changes: ${changes}`,
     `Candidates: ${latest.dryRunCandidates ?? 0} dry-run; previews: ${latest.previewAttempts ?? 0}; submitted: ${latest.submittedOrders ?? 0}`,
     `Preview IDs: ${(latest.previewIds ?? []).join(", ") || "none"}`,

@@ -1,6 +1,7 @@
 import process from "node:process";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -59,6 +60,8 @@ function parseArgs(argv = process.argv.slice(2)) {
     limit: envNumber("AUTOTRADER_LIMIT", 25),
     executorLimit: envNumber("AUTOTRADER_EXECUTOR_LIMIT", 5),
     previewLimit: envNumber("AUTOTRADER_PREVIEW_LIMIT", 1),
+    respectNextRunAt: envBoolean("AUTOTRADER_RESPECT_NEXT_RUN_AT", true),
+    schedulerSlackSeconds: envNumber("AUTOTRADER_SCHEDULER_SLACK_SECONDS", 30),
     observationLogPath: envString("AUTOTRADER_OBSERVATION_LOG_PATH", "state/autotrader-heartbeat.jsonl"),
     latestReportPath: envString("AUTOTRADER_LATEST_REPORT_PATH", "state/autotrader-heartbeat-latest.json")
   };
@@ -169,6 +172,15 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.previewLimit = Number(arg.split("=")[1]);
     } else if (arg === "--no-preview") {
       options.previewLimit = 0;
+    } else if (arg === "--ignore-next-run-at" || arg === "--force") {
+      options.respectNextRunAt = false;
+    } else if (arg === "--respect-next-run-at") {
+      options.respectNextRunAt = true;
+    } else if (arg === "--scheduler-slack-seconds") {
+      options.schedulerSlackSeconds = Number(next);
+      index += 1;
+    } else if (arg.startsWith("--scheduler-slack-seconds=")) {
+      options.schedulerSlackSeconds = Number(arg.split("=")[1]);
     } else if (arg === "--observation-log") {
       options.observationLogPath = next;
       index += 1;
@@ -264,6 +276,46 @@ function absolutePath(value) {
   return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
 }
 
+export function schedulerDecision(previousObservation, options, now = new Date()) {
+  const nextRunAt = previousObservation?.nextRunAt ?? previousObservation?.summary?.nextRunAt;
+  const dueAtMs = typeof nextRunAt === "string" ? Date.parse(nextRunAt) : Number.NaN;
+  const nowMs = now.getTime();
+  const slackMs = Math.max(0, Number(options.schedulerSlackSeconds ?? 0)) * 1000;
+  if (!options.respectNextRunAt) {
+    return {
+      skipped: false,
+      reason: "forced",
+      respectNextRunAt: false,
+      previousNextRunAt: typeof nextRunAt === "string" ? nextRunAt : undefined
+    };
+  }
+  if (!Number.isFinite(dueAtMs)) {
+    return {
+      skipped: false,
+      reason: "missing_next_run_at",
+      respectNextRunAt: true,
+      previousNextRunAt: typeof nextRunAt === "string" ? nextRunAt : undefined
+    };
+  }
+  const dueInSeconds = Math.ceil((dueAtMs - nowMs) / 1000);
+  if (dueAtMs - slackMs > nowMs) {
+    return {
+      skipped: true,
+      reason: "not_due",
+      respectNextRunAt: true,
+      previousNextRunAt: nextRunAt,
+      dueInSeconds
+    };
+  }
+  return {
+    skipped: false,
+    reason: "due",
+    respectNextRunAt: true,
+    previousNextRunAt: nextRunAt,
+    dueInSeconds
+  };
+}
+
 async function readJsonIfExists(filePath) {
   try {
     return JSON.parse(await readFile(filePath, "utf8"));
@@ -280,6 +332,9 @@ function compactObservation(report) {
     generatedAt: new Date().toISOString(),
     stateDbPath: report.environment.stateDbPath,
     sessionId: report.summary?.sessionId,
+    schedulerSkipped: report.scheduler?.skipped ?? false,
+    schedulerReason: report.scheduler?.reason,
+    schedulerDueInSeconds: report.scheduler?.dueInSeconds,
     startedThisRun: report.summary?.startedThisRun,
     dryRunCandidates: report.summary?.dryRunCandidates,
     previewAttempts: report.summary?.previewAttempts,
@@ -303,6 +358,9 @@ function observationChanges(previous, current) {
   }
   if (current.startedThisRun) {
     changes.push("session_started");
+  }
+  if (current.schedulerSkipped && !previous.schedulerSkipped) {
+    changes.push("heartbeat_deferred_until_next_run");
   }
   if (previous.dryRunCandidates !== current.dryRunCandidates) {
     changes.push("candidate_count_changed");
@@ -421,6 +479,9 @@ async function findOrCreateSession(client, options, report) {
 
 async function main() {
   const options = parseArgs();
+  const latestPath = absolutePath(options.latestReportPath);
+  const previousObservation = await readJsonIfExists(latestPath);
+  const scheduler = schedulerDecision(previousObservation, options);
   const client = new Client({
     name: "codex-autotrader-heartbeat",
     version: "0.1.0"
@@ -456,8 +517,52 @@ async function main() {
     dryRunExecutor: null,
     previewExecutor: null,
     observation: null,
+    scheduler,
     summary: null
   };
+
+  if (scheduler.skipped) {
+    report.iteration = {
+      elapsedMs: 0,
+      sessionId: previousObservation?.sessionId,
+      startedThisRun: false,
+      actionCounts: previousObservation?.actionCounts ?? {},
+      proposedOrders: previousObservation?.proposedOrders,
+      nextRunAt: scheduler.previousNextRunAt
+    };
+    report.dryRunExecutor = {
+      elapsedMs: 0,
+      candidateCount: previousObservation?.dryRunCandidates ?? 0,
+      executedCount: 0,
+      statuses: {},
+      previewIds: [],
+      submitted: 0
+    };
+    report.previewExecutor = {
+      elapsedMs: 0,
+      candidateCount: 0,
+      executedCount: 0,
+      statuses: {},
+      previewIds: [],
+      submitted: 0
+    };
+    report.summary = {
+      ok: true,
+      sessionId: previousObservation?.sessionId,
+      startedThisRun: false,
+      skippedDueToSchedule: true,
+      schedulerReason: scheduler.reason,
+      dryRunCandidates: previousObservation?.dryRunCandidates ?? 0,
+      previewAttempts: previousObservation?.previewAttempts ?? 0,
+      previewIds: previousObservation?.previewIds ?? [],
+      submittedOrders: 0,
+      noSubmitInvariantHeld: true,
+      nextRunAt: scheduler.previousNextRunAt
+    };
+    report.observation = await persistObservation(report, options);
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
 
   try {
     await client.connect(transport);
@@ -557,7 +662,9 @@ async function main() {
   console.log(JSON.stringify(report, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exit(1);
+  });
+}
