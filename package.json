@@ -43,6 +43,7 @@
     "universe:once": "tsx ./scripts/universe-discovery.ts",
     "forecast:write": "tsx ./scripts/forecast-writer.ts",
     "autotrader:once": "tsx ./scripts/autotrader-iteration.ts",
+    "autotrader:agent-loop": "tsx ./scripts/autotrader-agent-loop.ts",
     "autotrader:simulate": "tsx ./scripts/autotrader-simulation.ts"
   },
   "devDependencies": {

@@ -8,6 +8,18 @@ import type {
   StoredUniverseMarketInput
 } from "../../state-store/src/index.js";
 export {
+  applyAutoTradingAgentDecisionPlan,
+  buildAutoTradingAgentBrief,
+  type AutoTradingAgentAction,
+  type AutoTradingAgentAppliedDecision,
+  type AutoTradingAgentBrief,
+  type AutoTradingAgentBriefCandidate,
+  type AutoTradingAgentBriefInput,
+  type AutoTradingAgentDecision,
+  type AutoTradingAgentDecisionApplyResult,
+  type AutoTradingAgentDecisionPlan
+} from "./agent-loop.js";
+export {
   buildIndependentForecastArtifact,
   runIndependentForecastWriter,
   type ForecastWriterInput,
