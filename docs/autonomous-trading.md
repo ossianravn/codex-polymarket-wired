@@ -122,6 +122,8 @@ Use `npm run smoke:autotrader-mcp` for an end-to-end no-submit MCP smoke. It sta
 
 Use `npm run autotrader:heartbeat` for recurring observation. It runs the same MCP path but resumes the active named session instead of creating duplicate sessions, refreshes the universe, runs one iteration, dry-runs executor eligibility, creates at most one guarded preview, and keeps `POLYMARKET_ENABLE_TRADING=false`.
 
+The heartbeat runner accepts environment-variable configuration for automation contexts: `AUTOTRADER_BUDGET_USDC`, `AUTOTRADER_TIMEFRAME_HOURS`, `AUTOTRADER_RISK_PROFILE`, `AUTOTRADER_SESSION_NAME`, `AUTOTRADER_STATE_DB_PATH`, `AUTOTRADER_EXECUTOR_LIMIT`, `AUTOTRADER_PREVIEW_LIMIT`, and related universe filter variables. This avoids relying on shell-specific npm argument forwarding.
+
 ## MCP tools
 
 - `start_auto_trading_session`

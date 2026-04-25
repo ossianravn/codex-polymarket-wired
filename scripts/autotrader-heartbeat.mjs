@@ -12,29 +12,51 @@ const REQUIRED_TOOLS = [
   "run_auto_trading_executor"
 ];
 
+function envString(name, fallback) {
+  const value = process.env[name];
+  return value === undefined || value.trim() === "" ? fallback : value;
+}
+
+function envNumber(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function envBoolean(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
 function parseArgs(argv = process.argv.slice(2)) {
   const options = {
-    sessionId: undefined,
-    sessionName: "autotrader heartbeat live_guarded no submit",
-    stateDbPath: "state/autotrader-heartbeat.sqlite",
-    ingest: true,
-    source: "composite",
-    universePages: 1,
-    pageSize: 100,
-    enrichTopN: 0,
-    budgetUsdc: 30,
-    timeframeHours: 24,
-    riskProfile: "aggressive",
-    mode: "live_guarded",
-    maxSingleOrderUsdc: 5,
-    maxOpenPositions: 3,
-    maxMarketHorizonHours: 72,
-    minLiquidityUsdc: 1000,
-    maxSpreadCents: 12,
-    stopLossUsdc: 10,
-    limit: 25,
-    executorLimit: 5,
-    previewLimit: 1
+    sessionId: envString("AUTOTRADER_SESSION_ID", undefined),
+    sessionName: envString("AUTOTRADER_SESSION_NAME", "autotrader heartbeat live_guarded no submit"),
+    stateDbPath: envString("AUTOTRADER_STATE_DB_PATH", "state/autotrader-heartbeat.sqlite"),
+    ingest: envBoolean("AUTOTRADER_INGEST", true),
+    source: envString("AUTOTRADER_UNIVERSE_SOURCE", "composite"),
+    universePages: envNumber("AUTOTRADER_UNIVERSE_PAGES", 1),
+    pageSize: envNumber("AUTOTRADER_PAGE_SIZE", 100),
+    enrichTopN: envNumber("AUTOTRADER_ENRICH_TOP_N", 0),
+    budgetUsdc: envNumber("AUTOTRADER_BUDGET_USDC", 30),
+    timeframeHours: envNumber("AUTOTRADER_TIMEFRAME_HOURS", 24),
+    riskProfile: envString("AUTOTRADER_RISK_PROFILE", "aggressive"),
+    mode: envString("AUTOTRADER_MODE", "live_guarded"),
+    maxSingleOrderUsdc: envNumber("AUTOTRADER_MAX_SINGLE_ORDER_USDC", 5),
+    maxOpenPositions: envNumber("AUTOTRADER_MAX_OPEN_POSITIONS", 3),
+    maxMarketHorizonHours: envNumber("AUTOTRADER_MAX_MARKET_HORIZON_HOURS", 72),
+    minLiquidityUsdc: envNumber("AUTOTRADER_MIN_LIQUIDITY_USDC", 1000),
+    maxSpreadCents: envNumber("AUTOTRADER_MAX_SPREAD_CENTS", 12),
+    stopLossUsdc: envNumber("AUTOTRADER_STOP_LOSS_USDC", 10),
+    limit: envNumber("AUTOTRADER_LIMIT", 25),
+    executorLimit: envNumber("AUTOTRADER_EXECUTOR_LIMIT", 5),
+    previewLimit: envNumber("AUTOTRADER_PREVIEW_LIMIT", 1)
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];

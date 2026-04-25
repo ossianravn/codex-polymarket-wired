@@ -142,6 +142,8 @@ Use `npm run smoke:autotrader-mcp` to run a no-submit MCP smoke: seed an ending-
 
 Use `npm run autotrader:heartbeat` for the recurring no-submit runner. It resumes an active named `live_guarded` session when available, otherwise starts a new 24-hour aggressive mandate, refreshes the composite universe, runs one planning iteration, dry-runs executor eligibility, creates at most one guarded preview, and asserts zero submitted orders.
 
+Heartbeat automations can configure the mandate through environment variables such as `AUTOTRADER_BUDGET_USDC`, `AUTOTRADER_TIMEFRAME_HOURS`, `AUTOTRADER_RISK_PROFILE`, `AUTOTRADER_SESSION_NAME`, `AUTOTRADER_STATE_DB_PATH`, `AUTOTRADER_EXECUTOR_LIMIT`, and `AUTOTRADER_PREVIEW_LIMIT`. The runner still forces `POLYMARKET_ENABLE_TRADING=false` internally.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:
