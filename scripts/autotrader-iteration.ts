@@ -5,9 +5,11 @@ import {
   compactAutoTradingIterationResult,
   evaluateUniverseFreshness,
   normalizeAutoTradingMandate,
+  refreshAutoTradingMarketSnapshots,
   runResearchEvidencePipeline,
   runIndependentForecastWriter,
   runAutoTradingIteration,
+  type AutoTradingSnapshotRefreshResult,
   type AutoTradingMandateInput,
   type AutoTradingRiskProfile,
   type ResearchSourcePack
@@ -24,6 +26,9 @@ interface CliOptions {
   mode?: "paper" | "live_guarded" | "live_autonomous";
   limit: number;
   autoForecast: boolean;
+  refreshSnapshots: boolean;
+  refreshSnapshotLimit: number;
+  refreshSnapshotMaxAgeMinutes: number;
   researchSourceFile?: string;
   maxUniverseAgeMinutes: number;
   allowStaleUniverse: boolean;
@@ -52,6 +57,9 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
   const options: CliOptions = {
     limit: 25,
     autoForecast: true,
+    refreshSnapshots: envBoolean("AUTOTRADER_REFRESH_SNAPSHOTS", false),
+    refreshSnapshotLimit: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_LIMIT", 50),
+    refreshSnapshotMaxAgeMinutes: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_MAX_AGE_MINUTES", 5),
     researchSourceFile: process.env.AUTOTRADER_RESEARCH_SOURCE_FILE,
     maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
     allowStaleUniverse: envBoolean("AUTOTRADER_ALLOW_STALE_UNIVERSE", false),
@@ -98,6 +106,20 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
       options.limit = Number(arg.split("=")[1]);
     } else if (arg === "--no-auto-forecast") {
       options.autoForecast = false;
+    } else if (arg === "--refresh-snapshots") {
+      options.refreshSnapshots = true;
+    } else if (arg === "--no-refresh-snapshots") {
+      options.refreshSnapshots = false;
+    } else if (arg === "--refresh-snapshot-limit") {
+      options.refreshSnapshotLimit = Number(next);
+      index += 1;
+    } else if (arg.startsWith("--refresh-snapshot-limit=")) {
+      options.refreshSnapshotLimit = Number(arg.split("=")[1]);
+    } else if (arg === "--refresh-snapshot-max-age-minutes") {
+      options.refreshSnapshotMaxAgeMinutes = Number(next);
+      index += 1;
+    } else if (arg.startsWith("--refresh-snapshot-max-age-minutes=")) {
+      options.refreshSnapshotMaxAgeMinutes = Number(arg.split("=")[1]);
     } else if (arg === "--research-source-file") {
       options.researchSourceFile = next;
       index += 1;
@@ -119,6 +141,8 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
     }
   }
   options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes)));
+  options.refreshSnapshotLimit = Math.max(1, Math.min(250, Number(options.refreshSnapshotLimit)));
+  options.refreshSnapshotMaxAgeMinutes = Math.max(0, Math.min(24 * 60, Number(options.refreshSnapshotMaxAgeMinutes)));
   return options;
 }
 
@@ -172,7 +196,7 @@ async function main(): Promise<void> {
     store.getLatestUniverseRun(),
     { maxAgeMinutes: options.maxUniverseAgeMinutes }
   );
-  if (!universeFreshness.isFresh && !options.allowStaleUniverse) {
+  if (!universeFreshness.isFresh && !options.allowStaleUniverse && !options.refreshSnapshots) {
     const output = {
       status: "blocked",
       blocker: "stale_universe_run",
@@ -207,6 +231,15 @@ async function main(): Promise<void> {
       mode: options.mode ?? "paper"
     };
   const mandate = normalizeAutoTradingMandate(mandateInput);
+  let snapshotRefresh: AutoTradingSnapshotRefreshResult | undefined;
+  if (options.refreshSnapshots) {
+    snapshotRefresh = await refreshAutoTradingMarketSnapshots(store, config, {
+      runId: universeFreshness.latestRunId,
+      mandate,
+      limit: options.refreshSnapshotLimit,
+      maxAgeMinutes: options.refreshSnapshotMaxAgeMinutes
+    });
+  }
   const researchPipeline = sourcePacks && sourcePacks.length > 0
     ? runResearchEvidencePipeline(store, {
       sessionId: options.sessionId,
@@ -235,6 +268,7 @@ async function main(): Promise<void> {
     summary: `auto-trader proposed ${result.summary.proposedOrders} paper orders; next run ${result.summary.nextRunAt ?? "unknown"}`,
     output: {
       universeFreshness,
+      snapshotRefresh,
       researchPipeline,
       forecastWriter,
       iteration: result
@@ -244,6 +278,7 @@ async function main(): Promise<void> {
   if (options.json) {
     const output = {
       universeFreshness,
+      snapshotRefresh,
       researchPipeline,
       forecastWriter,
       ...(options.compact ? compactAutoTradingIterationResult(result) : result)
@@ -254,6 +289,9 @@ async function main(): Promise<void> {
       forecastWriter
         ? `Forecast writer: ${forecastWriter.written} written, ${forecastWriter.skippedExisting} existing, ${forecastWriter.skippedIneligible} ineligible`
         : "Forecast writer: skipped",
+      snapshotRefresh
+        ? `Snapshot refresh: ${snapshotRefresh.refreshed} refreshed, ${snapshotRefresh.skippedFresh} fresh, ${snapshotRefresh.failed} failed`
+        : "Snapshot refresh: skipped",
       `Universe freshness: ${universeFreshness.reason}${universeFreshness.ageMinutes === undefined ? "" : ` (${universeFreshness.ageMinutes.toFixed(1)}m old / ${universeFreshness.maxAgeMinutes}m max)`}`,
       renderSummary(result)
     ].join("\n"));

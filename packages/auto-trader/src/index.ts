@@ -37,6 +37,13 @@ export {
   type ResearchRequestWorkerInput,
   type ResearchRequestWorkerResult
 } from "./research-request-worker.js";
+export {
+  refreshAutoTradingMarketSnapshots,
+  selectAutoTradingSnapshotRefreshMarkets,
+  type AutoTradingSnapshotRefreshInput,
+  type AutoTradingSnapshotRefreshIssue,
+  type AutoTradingSnapshotRefreshResult
+} from "./snapshot-refresh.js";
 
 export type AutoTradingRiskProfile = "conservative" | "balanced" | "aggressive";
 export type AutoTradingMode = "paper" | "live_guarded" | "live_autonomous";
