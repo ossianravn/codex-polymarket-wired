@@ -299,6 +299,10 @@ export interface StoredPaperTradingPositionRecord {
   currentValueUsdc?: number;
   unrealizedPnlUsdc?: number;
   unrealizedPnlPct?: number;
+  closingPrice?: number;
+  closingValueUsdc?: number;
+  realizedPnlUsdc?: number;
+  realizedPnlPct?: number;
   openedAt: string;
   updatedAt: string;
   closedAt?: string;
@@ -310,10 +314,14 @@ export interface StoredPaperTradingLedgerSummary {
   generatedAt: string;
   budgetUsdc: number;
   spentUsdc: number;
+  realizedProceedsUsdc: number;
   remainingBudgetUsdc: number;
   openPositionCount: number;
+  closedPositionCount: number;
   positionValueUsdc: number;
   unrealizedPnlUsdc: number;
+  realizedPnlUsdc: number;
+  totalPnlUsdc: number;
   portfolioValueUsdc: number;
 }
 
@@ -918,6 +926,10 @@ function paperTradingPositionRowToRecord(row: unknown): StoredPaperTradingPositi
     currentValueUsdc: asNumber(record.current_value_usdc),
     unrealizedPnlUsdc: asNumber(record.unrealized_pnl_usdc),
     unrealizedPnlPct: asNumber(record.unrealized_pnl_pct),
+    closingPrice: asNumber(record.closing_price),
+    closingValueUsdc: asNumber(record.closing_value_usdc),
+    realizedPnlUsdc: asNumber(record.realized_pnl_usdc),
+    realizedPnlPct: asNumber(record.realized_pnl_pct),
     openedAt: String(record.opened_at ?? ""),
     updatedAt: String(record.updated_at ?? ""),
     closedAt: typeof record.closed_at === "string" ? record.closed_at : undefined,
@@ -1110,6 +1122,14 @@ export class StateStore {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA synchronous = NORMAL;");
     this.migrate();
+  }
+
+  private ensureColumn(tableName: string, columnName: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${tableName})`).all()
+      .map((row) => String(rowRecord(row).name ?? ""));
+    if (!columns.includes(columnName)) {
+      this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition};`);
+    }
   }
 
   private migrate(): void {
@@ -1476,6 +1496,10 @@ export class StateStore {
         current_value_usdc REAL,
         unrealized_pnl_usdc REAL,
         unrealized_pnl_pct REAL,
+        closing_price REAL,
+        closing_value_usdc REAL,
+        realized_pnl_usdc REAL,
+        realized_pnl_pct REAL,
         opened_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         closed_at TEXT,
@@ -1557,6 +1581,10 @@ export class StateStore {
       CREATE INDEX IF NOT EXISTS idx_portfolio_positions_snapshot_market ON portfolio_positions(snapshot_id, market_key);
       CREATE INDEX IF NOT EXISTS idx_portfolio_positions_market ON portfolio_positions(market_key);
     `);
+    this.ensureColumn("paper_trading_positions", "closing_price", "REAL");
+    this.ensureColumn("paper_trading_positions", "closing_value_usdc", "REAL");
+    this.ensureColumn("paper_trading_positions", "realized_pnl_usdc", "REAL");
+    this.ensureColumn("paper_trading_positions", "realized_pnl_pct", "REAL");
   }
 
   private preparedCount(tableName: string): number {
@@ -3100,6 +3128,81 @@ export class StateStore {
           jsonString(input.metadata ?? {}, {})
         );
       }
+    } else if (side === "sell_yes" && shares > 0) {
+      const existingPosition = this.db.prepare(`
+        SELECT *
+        FROM paper_trading_positions
+        WHERE session_id = ? AND market_key = ? AND status = 'open'
+        LIMIT 1
+      `).get(input.sessionId, input.marketKey);
+      if (existingPosition) {
+        const existing = paperTradingPositionRowToRecord(existingPosition);
+        const soldShares = Math.min(shares, existing.shares);
+        const proceedsUsdc = costUsdc;
+        const soldCostBasis = existing.averagePrice * soldShares;
+        const realizedPnlUsdc = proceedsUsdc - soldCostBasis;
+        const realizedPnlPct = (realizedPnlUsdc / Math.max(0.000001, soldCostBasis)) * 100;
+        const remainingShares = Math.max(0, existing.shares - soldShares);
+        const mergedMetadata = {
+          ...existing.metadata,
+          ...(input.metadata ?? {}),
+          lastExitFillId: fillId
+        };
+
+        if (remainingShares <= 0.000001) {
+          this.db.prepare(`
+            UPDATE paper_trading_positions
+            SET title = COALESCE(?, title),
+                status = 'closed',
+                shares = ?,
+                cost_usdc = ?,
+                current_price = ?,
+                current_value_usdc = ?,
+                unrealized_pnl_usdc = 0,
+                unrealized_pnl_pct = 0,
+                closing_price = ?,
+                closing_value_usdc = ?,
+                realized_pnl_usdc = ?,
+                realized_pnl_pct = ?,
+                updated_at = ?,
+                closed_at = ?,
+                metadata_json = ?
+            WHERE position_id = ?
+          `).run(
+            input.title ?? null,
+            soldShares,
+            soldCostBasis,
+            price,
+            proceedsUsdc,
+            price,
+            proceedsUsdc,
+            realizedPnlUsdc,
+            realizedPnlPct,
+            filledAt,
+            filledAt,
+            jsonString(mergedMetadata, {}),
+            existing.positionId
+          );
+        } else {
+          const remainingCost = existing.averagePrice * remainingShares;
+          this.db.prepare(`
+            UPDATE paper_trading_positions
+            SET title = COALESCE(?, title),
+                shares = ?,
+                cost_usdc = ?,
+                updated_at = ?,
+                metadata_json = ?
+            WHERE position_id = ?
+          `).run(
+            input.title ?? null,
+            remainingShares,
+            remainingCost,
+            filledAt,
+            jsonString(mergedMetadata, {}),
+            existing.positionId
+          );
+        }
+      }
     }
 
     const row = this.db.prepare(`
@@ -3192,8 +3295,14 @@ export class StateStore {
     const session = this.getAutoTradingSession(sessionId);
     const positions = this.listPaperTradingPositions({ sessionId, limit: 1000 });
     const fills = this.listPaperTradingFills({ sessionId, limit: 1000 });
-    const spentUsdc = fills.reduce((sum, fill) => sum + fill.costUsdc, 0);
+    const spentUsdc = fills
+      .filter((fill) => fill.side === "buy_yes")
+      .reduce((sum, fill) => sum + fill.costUsdc, 0);
+    const realizedProceedsUsdc = fills
+      .filter((fill) => fill.side === "sell_yes")
+      .reduce((sum, fill) => sum + fill.costUsdc, 0);
     const openPositions = positions.filter((position) => position.status === "open");
+    const closedPositions = positions.filter((position) => position.status === "closed");
     const positionValueUsdc = openPositions.reduce(
       (sum, position) => sum + (position.currentValueUsdc ?? position.costUsdc),
       0
@@ -3202,18 +3311,26 @@ export class StateStore {
       (sum, position) => sum + (position.unrealizedPnlUsdc ?? 0),
       0
     );
+    const realizedPnlUsdc = closedPositions.reduce(
+      (sum, position) => sum + (position.realizedPnlUsdc ?? 0),
+      0
+    );
     const budgetUsdc = session?.budgetUsdc ?? 0;
-    const remainingBudgetUsdc = Math.max(0, budgetUsdc - spentUsdc);
+    const remainingBudgetUsdc = Math.max(0, budgetUsdc - spentUsdc + realizedProceedsUsdc);
     return {
       summary: {
         sessionId,
         generatedAt: nowIso(),
         budgetUsdc: Number(budgetUsdc.toFixed(6)),
         spentUsdc: Number(spentUsdc.toFixed(6)),
+        realizedProceedsUsdc: Number(realizedProceedsUsdc.toFixed(6)),
         remainingBudgetUsdc: Number(remainingBudgetUsdc.toFixed(6)),
         openPositionCount: openPositions.length,
+        closedPositionCount: closedPositions.length,
         positionValueUsdc: Number(positionValueUsdc.toFixed(6)),
         unrealizedPnlUsdc: Number(unrealizedPnlUsdc.toFixed(6)),
+        realizedPnlUsdc: Number(realizedPnlUsdc.toFixed(6)),
+        totalPnlUsdc: Number((realizedPnlUsdc + unrealizedPnlUsdc).toFixed(6)),
         portfolioValueUsdc: Number((remainingBudgetUsdc + positionValueUsdc).toFixed(6))
       },
       positions,

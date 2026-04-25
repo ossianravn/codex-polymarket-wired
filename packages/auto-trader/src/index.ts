@@ -10,7 +10,7 @@ import type {
 
 export type AutoTradingRiskProfile = "conservative" | "balanced" | "aggressive";
 export type AutoTradingMode = "paper" | "live_guarded" | "live_autonomous";
-export type AutoTradingAction = "paper_buy_yes" | "research_required" | "monitor" | "skip";
+export type AutoTradingAction = "paper_buy_yes" | "paper_sell_yes" | "research_required" | "monitor" | "skip";
 
 export interface AutoTradingMandateInput {
   name?: string;
@@ -30,6 +30,9 @@ export interface AutoTradingMandateInput {
   minResearchPriorityScore?: number;
   maxResolutionAmbiguityScore?: number;
   stopLossUsdc?: number;
+  takeProfitPct?: number;
+  positionStopLossPct?: number;
+  timeExitHours?: number;
   heartbeatMinutes?: number;
   allowedCategoryGroups?: string[];
   blockedCategoryGroups?: string[];
@@ -76,14 +79,18 @@ export interface AutoTradingIterationResult {
     spentUsdc: number;
     positionValueUsdc: number;
     unrealizedPnlUsdc: number;
+    realizedPnlUsdc: number;
+    totalPnlUsdc: number;
     portfolioValueUsdc: number;
     openPositions: number;
     proposedBudgetUsdc: number;
     remainingBudgetUsdc: number;
     eligibleMarkets: number;
     proposedOrders: number;
+    exitOrders: number;
     researchRequired: number;
     blocked: number;
+    riskBlockedNewBuys: boolean;
     nextRunAt?: string;
   };
   decisions: StoredAutoTradingDecisionRecord[];
@@ -149,6 +156,9 @@ export interface CompactAutoTradingIterationResult {
     | "maxMarketHorizonHours"
     | "minLiquidityUsdc"
     | "maxSpreadCents"
+    | "takeProfitPct"
+    | "positionStopLossPct"
+    | "timeExitHours"
     | "heartbeatMinutes"
   >;
   candidates: CompactAutoTradingDecision[];
@@ -259,6 +269,9 @@ interface RiskDefaults {
   minResearchPriorityScore: number;
   maxResolutionAmbiguityScore: number;
   stopLossBudgetFraction: number;
+  takeProfitPct: number;
+  positionStopLossPct: number;
+  timeExitHours: number;
   heartbeatMinutes: number;
   includeLongshots: boolean;
   proposalThreshold: number;
@@ -278,6 +291,9 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     minResearchPriorityScore: 70,
     maxResolutionAmbiguityScore: 30,
     stopLossBudgetFraction: 0.12,
+    takeProfitPct: 15,
+    positionStopLossPct: 8,
+    timeExitHours: 2,
     heartbeatMinutes: 60,
     includeLongshots: false,
     proposalThreshold: 72
@@ -295,6 +311,9 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     minResearchPriorityScore: 58,
     maxResolutionAmbiguityScore: 45,
     stopLossBudgetFraction: 0.22,
+    takeProfitPct: 25,
+    positionStopLossPct: 15,
+    timeExitHours: 1,
     heartbeatMinutes: 30,
     includeLongshots: true,
     proposalThreshold: 65
@@ -312,6 +331,9 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     minResearchPriorityScore: 48,
     maxResolutionAmbiguityScore: 60,
     stopLossBudgetFraction: 0.35,
+    takeProfitPct: 45,
+    positionStopLossPct: 25,
+    timeExitHours: 0.25,
     heartbeatMinutes: 15,
     includeLongshots: true,
     proposalThreshold: 58
@@ -436,6 +458,9 @@ export function normalizeAutoTradingMandate(input: AutoTradingMandateInput): Aut
     minResearchPriorityScore: Math.max(0, Math.min(100, input.minResearchPriorityScore ?? defaults.minResearchPriorityScore)),
     maxResolutionAmbiguityScore: Math.max(0, Math.min(100, input.maxResolutionAmbiguityScore ?? defaults.maxResolutionAmbiguityScore)),
     stopLossUsdc: Math.max(0, input.stopLossUsdc ?? budgetUsdc * defaults.stopLossBudgetFraction),
+    takeProfitPct: Math.max(1, input.takeProfitPct ?? defaults.takeProfitPct),
+    positionStopLossPct: Math.max(1, input.positionStopLossPct ?? defaults.positionStopLossPct),
+    timeExitHours: Math.max(0, input.timeExitHours ?? defaults.timeExitHours),
     heartbeatMinutes: Math.max(5, input.heartbeatMinutes ?? defaults.heartbeatMinutes),
     allowedCategoryGroups: input.allowedCategoryGroups ?? [],
     blockedCategoryGroups: input.blockedCategoryGroups ?? [],
@@ -530,7 +555,7 @@ function scoreMarket(market: Record<string, unknown>, mandate: AutoTradingMandat
 
 function nextCheckForDecision(decision: AutoTradingDecision, mandate: AutoTradingMandate, now: Date): string {
   const hoursToEnd = hoursBetween(now, decision.market.endDate);
-  const baseMinutes = decision.action === "paper_buy_yes"
+  const baseMinutes = decision.action === "paper_buy_yes" || decision.action === "paper_sell_yes"
     ? Math.max(5, Math.floor(mandate.heartbeatMinutes / 2))
     : mandate.heartbeatMinutes;
   if (hoursToEnd !== undefined && hoursToEnd < 6) {
@@ -552,6 +577,86 @@ function eventIdentity(market: Record<string, unknown>): string {
 function positionEventIdentity(position: { marketKey: string; metadata: Record<string, unknown> }): string {
   const eventKey = position.metadata.eventKey;
   return typeof eventKey === "string" && eventKey.trim() ? eventKey : `marketKey:${position.marketKey}`;
+}
+
+function hoursUntil(now: Date, isoValue: unknown): number | undefined {
+  if (typeof isoValue !== "string" || !isoValue.trim()) {
+    return undefined;
+  }
+  const parsed = Date.parse(isoValue);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return (parsed - now.getTime()) / (1000 * 60 * 60);
+}
+
+function buildPaperExitDecisions(
+  ledger: StoredPaperTradingLedger,
+  mandate: AutoTradingMandate,
+  session: StoredAutoTradingSessionRecord,
+  now: Date
+): AutoTradingDecision[] {
+  return ledger.positions
+    .filter((position) => position.status === "open")
+    .map((position) => {
+      const currentPrice = position.currentPrice;
+      const currentValueUsdc = position.currentValueUsdc ?? (
+        currentPrice === undefined ? undefined : position.shares * currentPrice
+      );
+      const unrealizedPnlPct = position.unrealizedPnlPct ?? 0;
+      const hoursToMarketEnd = hoursUntil(now, position.metadata.endDate);
+      const hoursToSessionEnd = hoursUntil(now, session.endsAt);
+      const reasonCodes: string[] = [];
+      const blockers: string[] = [];
+
+      if (currentPrice === undefined || currentValueUsdc === undefined) {
+        blockers.push("missing_position_mark");
+      }
+      if (unrealizedPnlPct >= mandate.takeProfitPct) {
+        reasonCodes.push("take_profit");
+      }
+      if (unrealizedPnlPct <= -mandate.positionStopLossPct) {
+        reasonCodes.push("position_stop_loss");
+      }
+      if (hoursToMarketEnd !== undefined && hoursToMarketEnd <= mandate.timeExitHours) {
+        reasonCodes.push("time_exit_market_near_resolution");
+      }
+      if (hoursToSessionEnd !== undefined && hoursToSessionEnd <= mandate.timeExitHours) {
+        reasonCodes.push("time_exit_session_near_end");
+      }
+
+      const shouldExit = reasonCodes.length > 0 && blockers.length === 0;
+      const market = {
+        marketKey: position.marketKey,
+        title: position.title,
+        eventKey: position.metadata.eventKey,
+        endDate: position.metadata.endDate,
+        currentPrice,
+        averagePrice: position.averagePrice,
+        shares: position.shares,
+        unrealizedPnlPct,
+        unrealizedPnlUsdc: position.unrealizedPnlUsdc
+      };
+      const decision = {
+        marketKey: position.marketKey,
+        title: position.title,
+        action: shouldExit ? "paper_sell_yes" : "monitor",
+        status: shouldExit ? "proposed" : "watch",
+        score: shouldExit ? 100 : 0,
+        allocatedBudgetUsdc: shouldExit ? roundMoney(currentValueUsdc as number) : undefined,
+        targetPrice: shouldExit ? currentPrice : undefined,
+        shares: shouldExit ? position.shares : undefined,
+        tokenId: typeof position.metadata.tokenId === "string" ? position.metadata.tokenId : undefined,
+        reasonCodes: shouldExit ? reasonCodes : ["position_monitor"],
+        blockers,
+        market
+      } satisfies AutoTradingDecision;
+      return {
+        ...decision,
+        nextCheckAt: nextCheckForDecision(decision, mandate, now)
+      };
+    })
+    .filter((decision) => decision.action === "paper_sell_yes");
 }
 
 function marketIdentity(market: Record<string, unknown>): string {
@@ -600,7 +705,10 @@ function createSession(store: StateStore, mandate: AutoTradingMandate, now: Date
       maxMarketHorizonHours: mandate.maxMarketHorizonHours,
       minLiquidityUsdc: mandate.minLiquidityUsdc,
       maxSpreadCents: mandate.maxSpreadCents,
-      stopLossUsdc: mandate.stopLossUsdc
+      stopLossUsdc: mandate.stopLossUsdc,
+      takeProfitPct: mandate.takeProfitPct,
+      positionStopLossPct: mandate.positionStopLossPct,
+      timeExitHours: mandate.timeExitHours
     },
     metadata: {
       implementationStage: "paper-planner",
@@ -688,6 +796,9 @@ export function compactAutoTradingIterationResult(
       maxMarketHorizonHours: result.mandate.maxMarketHorizonHours,
       minLiquidityUsdc: result.mandate.minLiquidityUsdc,
       maxSpreadCents: result.mandate.maxSpreadCents,
+      takeProfitPct: result.mandate.takeProfitPct,
+      positionStopLossPct: result.mandate.positionStopLossPct,
+      timeExitHours: result.mandate.timeExitHours,
       heartbeatMinutes: result.mandate.heartbeatMinutes
     },
     candidates: result.candidates.map(compactAutoTradingDecision)
@@ -716,6 +827,10 @@ export function runAutoTradingIteration(
   const session = existing ?? createSession(store, mandate, now);
   store.markPaperTradingPositions(session.sessionId, undefined, now.toISOString());
   let ledger = store.getPaperTradingLedger(session.sessionId);
+  let exitDecisions = mandate.mode === "paper"
+    ? buildPaperExitDecisions(ledger, mandate, session, now)
+    : [];
+  const riskBlockedNewBuys = ledger.summary.totalPnlUsdc <= -mandate.stopLossUsdc;
   const iterationId = randomUUID();
   const latestRun = store.getLatestUniverseRun();
   const runId = typeof latestRun?.runId === "string" ? latestRun.runId : "";
@@ -756,14 +871,18 @@ export function runAutoTradingIteration(
         spentUsdc: ledger.summary.spentUsdc,
         positionValueUsdc: ledger.summary.positionValueUsdc,
         unrealizedPnlUsdc: ledger.summary.unrealizedPnlUsdc,
+        realizedPnlUsdc: ledger.summary.realizedPnlUsdc,
+        totalPnlUsdc: ledger.summary.totalPnlUsdc,
         portfolioValueUsdc: ledger.summary.portfolioValueUsdc,
         openPositions: ledger.summary.openPositionCount,
         proposedBudgetUsdc: 0,
         remainingBudgetUsdc: ledger.summary.remainingBudgetUsdc,
         eligibleMarkets: 0,
         proposedOrders: 0,
+        exitOrders: 0,
         researchRequired: 0,
         blocked: 1,
+        riskBlockedNewBuys,
         nextRunAt: addMinutes(now, mandate.heartbeatMinutes)
       },
       decisions: stored,
@@ -823,7 +942,11 @@ export function runAutoTradingIteration(
         action = "skip";
         status = "blocked";
       } else if (score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold && targetPrice !== undefined && tokenId) {
-        if (remainingBudget <= 0) {
+        if (riskBlockedNewBuys) {
+          action = "monitor";
+          status = "watch";
+          blockers.push("session_stop_loss_reached");
+        } else if (remainingBudget <= 0) {
           action = "monitor";
           status = "watch";
           blockers.push("budget_exhausted");
@@ -884,8 +1007,14 @@ export function runAutoTradingIteration(
     })
     .slice(0, limit);
 
-  const cappedDecisions = decisions.map((decision, index) => {
-    if (decision.action === "paper_buy_yes" && index >= mandate.maxOpenPositions) {
+  const openPositionsAfterExits = Math.max(0, ledger.summary.openPositionCount - exitDecisions.length);
+  const allowedNewBuys = Math.max(0, mandate.maxOpenPositions - openPositionsAfterExits);
+  let proposedBuyCount = 0;
+  const cappedDecisions = [...exitDecisions, ...decisions].map((decision) => {
+    if (decision.action === "paper_buy_yes") {
+      proposedBuyCount += 1;
+    }
+    if (decision.action === "paper_buy_yes" && proposedBuyCount > allowedNewBuys) {
       return {
         ...decision,
         action: "monitor" as const,
@@ -925,40 +1054,63 @@ export function runAutoTradingIteration(
   if (persist && mandate.mode === "paper") {
     cappedDecisions.forEach((decision, index) => {
       const storedDecision = stored[index];
-      if (
-        decision.action !== "paper_buy_yes" ||
-        !decision.marketKey ||
-        !decision.targetPrice ||
-        !decision.shares ||
-        !decision.allocatedBudgetUsdc ||
-        !storedDecision
-      ) {
+      if (!decision.marketKey || decision.targetPrice === undefined || !decision.shares || !storedDecision) {
         return;
       }
-      store.recordPaperTradingFill({
-        sessionId: session.sessionId,
-        iterationId,
-        decisionId: storedDecision.decisionId,
-        marketKey: decision.marketKey,
-        title: decision.title,
-        side: "buy_yes",
-        price: decision.targetPrice,
-        shares: decision.shares,
-        costUsdc: decision.allocatedBudgetUsdc,
-        filledAt: now.toISOString(),
-        metadata: {
-          eventKey: eventIdentity(decision.market),
-          tokenId: decision.tokenId,
-          score: decision.score,
-          mode: mandate.mode
-        }
-      });
+      if (decision.action === "paper_buy_yes" && decision.allocatedBudgetUsdc) {
+        store.recordPaperTradingFill({
+          sessionId: session.sessionId,
+          iterationId,
+          decisionId: storedDecision.decisionId,
+          marketKey: decision.marketKey,
+          title: decision.title,
+          side: "buy_yes",
+          price: decision.targetPrice,
+          shares: decision.shares,
+          costUsdc: decision.allocatedBudgetUsdc,
+          filledAt: now.toISOString(),
+          metadata: {
+            eventKey: eventIdentity(decision.market),
+            tokenId: decision.tokenId,
+            score: decision.score,
+            mode: mandate.mode,
+            endDate: decision.market.endDate
+          }
+        });
+      }
+      if (decision.action === "paper_sell_yes" && decision.allocatedBudgetUsdc !== undefined) {
+        store.recordPaperTradingFill({
+          sessionId: session.sessionId,
+          iterationId,
+          decisionId: storedDecision.decisionId,
+          marketKey: decision.marketKey,
+          title: decision.title,
+          side: "sell_yes",
+          price: decision.targetPrice,
+          shares: decision.shares,
+          costUsdc: decision.allocatedBudgetUsdc,
+          filledAt: now.toISOString(),
+          metadata: {
+            eventKey: decision.market.eventKey ?? eventIdentity(decision.market),
+            tokenId: decision.tokenId,
+            score: decision.score,
+            mode: mandate.mode,
+            exitReasonCodes: decision.reasonCodes,
+            endDate: decision.market.endDate
+          }
+        });
+      }
     });
     store.markPaperTradingPositions(session.sessionId, undefined, now.toISOString());
     ledger = store.getPaperTradingLedger(session.sessionId);
+    exitDecisions = mandate.mode === "paper"
+      ? buildPaperExitDecisions(ledger, mandate, session, now)
+      : [];
   }
 
-  const proposedBudgetUsdc = cappedDecisions.reduce((sum, decision) => sum + (decision.allocatedBudgetUsdc ?? 0), 0);
+  const proposedBudgetUsdc = cappedDecisions
+    .filter((decision) => decision.action === "paper_buy_yes")
+    .reduce((sum, decision) => sum + (decision.allocatedBudgetUsdc ?? 0), 0);
   const nextRunAt = cappedDecisions
     .map((decision) => decision.nextCheckAt)
     .filter((value): value is string => Boolean(value))
@@ -978,14 +1130,18 @@ export function runAutoTradingIteration(
       spentUsdc: ledger.summary.spentUsdc,
       positionValueUsdc: ledger.summary.positionValueUsdc,
       unrealizedPnlUsdc: ledger.summary.unrealizedPnlUsdc,
+      realizedPnlUsdc: ledger.summary.realizedPnlUsdc,
+      totalPnlUsdc: ledger.summary.totalPnlUsdc,
       portfolioValueUsdc: ledger.summary.portfolioValueUsdc,
       openPositions: ledger.summary.openPositionCount,
       proposedBudgetUsdc: Number(proposedBudgetUsdc.toFixed(4)),
       remainingBudgetUsdc: ledger.summary.remainingBudgetUsdc,
       eligibleMarkets: cappedDecisions.filter((decision) => decision.status !== "blocked").length,
       proposedOrders: cappedDecisions.filter((decision) => decision.action === "paper_buy_yes").length,
+      exitOrders: cappedDecisions.filter((decision) => decision.action === "paper_sell_yes").length,
       researchRequired: cappedDecisions.filter((decision) => decision.action === "research_required").length,
       blocked: cappedDecisions.filter((decision) => decision.status === "blocked").length,
+      riskBlockedNewBuys,
       nextRunAt
     },
     decisions: stored,

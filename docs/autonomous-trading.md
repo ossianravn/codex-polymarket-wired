@@ -1,6 +1,6 @@
 # autonomous trading
 
-The first autonomous trading implementation is a paper-mode control plane. It turns a user mandate into persisted session state, timeframe-aware candidate filtering, paper fills, marked paper positions, and follow-up scheduling.
+The first autonomous trading implementation is a paper-mode control plane. It turns a user mandate into persisted session state, timeframe-aware candidate filtering, paper fills, marked paper positions, exit decisions, realized paper PnL, and follow-up scheduling.
 
 It does not submit live orders. Live execution remains gated behind `preview_limit_order`, `preview_marketable_order`, and `submit_previewed_order`.
 
@@ -23,6 +23,10 @@ max_open_positions: 6
 max_market_horizon_hours: 96
 min_liquidity_usdc: 5000
 max_spread_cents: 5
+take_profit_pct: 25
+position_stop_loss_pct: 15
+time_exit_hours: 1
+stop_loss_usdc: 10
 ```
 
 Risk profiles set defaults for:
@@ -32,6 +36,7 @@ Risk profiles set defaults for:
 - allowed market horizon relative to the session timeframe
 - minimum hours before resolution
 - liquidity, spread, tradability, research-priority, and ambiguity thresholds
+- take-profit, per-position stop-loss, time-exit, and session stop-loss thresholds
 - heartbeat cadence
 - whether longshots are allowed
 
@@ -42,10 +47,12 @@ Each iteration:
 1. Loads the latest persisted universe run.
 2. Filters markets by mandate timeframe, end date, liquidity, spread, ambiguity, tradability, and risk profile.
 3. Scores remaining candidates using trade-opportunity, research-priority, tradability, catalyst, horizon fit, and risk penalty.
-4. Produces paper `buy yes` proposals for the strongest candidates.
-5. Persists idempotent paper fills and aggregates open positions by session/market.
-6. Marks open paper positions from the latest persisted universe prices.
-7. Emits a next-run timestamp for heartbeat or per-market scheduling.
+4. Marks open paper positions from the latest persisted universe prices.
+5. Produces paper `sell yes` exits for take-profit, stop-loss, or near-resolution time-exit cases.
+6. Blocks new paper buys when the session stop-loss threshold is breached.
+7. Produces paper `buy yes` proposals for the strongest remaining candidates.
+8. Persists idempotent paper fills, aggregates open positions by session/market, and closes paper positions with realized PnL.
+9. Emits a next-run timestamp for heartbeat or per-market scheduling.
 
 ## commands
 
@@ -103,7 +110,6 @@ These tools persist session, decision, paper-fill, and paper-position records. T
 
 Before live autonomy, add:
 
-- realized PnL and stop-loss enforcement
 - paper/live reconciliation reports
 - explicit transition from paper decisions to preview generation
 - kill switch and session pause/resume tools

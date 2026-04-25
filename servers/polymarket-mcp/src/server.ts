@@ -1498,6 +1498,10 @@ server.registerTool(
       max_market_horizon_hours: z.number().positive().optional(),
       min_liquidity_usdc: z.number().min(0).optional(),
       max_spread_cents: z.number().positive().optional(),
+      stop_loss_usdc: z.number().min(0).optional(),
+      take_profit_pct: z.number().positive().optional(),
+      position_stop_loss_pct: z.number().positive().optional(),
+      time_exit_hours: z.number().min(0).optional(),
       limit: z.number().int().min(1).max(100).default(25),
       compact: z.boolean().default(true)
     }
@@ -1516,7 +1520,11 @@ server.registerTool(
         maxOpenPositions: input.max_open_positions,
         maxMarketHorizonHours: input.max_market_horizon_hours,
         minLiquidityUsdc: input.min_liquidity_usdc,
-        maxSpreadCents: input.max_spread_cents
+        maxSpreadCents: input.max_spread_cents,
+        stopLossUsdc: input.stop_loss_usdc,
+        takeProfitPct: input.take_profit_pct,
+        positionStopLossPct: input.position_stop_loss_pct,
+        timeExitHours: input.time_exit_hours
       },
       limit: input.limit
     });
@@ -1584,9 +1592,11 @@ server.registerTool(
       sessionId: input.session_id,
       limit: input.decision_limit
     });
+    const ledger = store.getPaperTradingLedger(input.session_id);
     return textResult({
       stateDbPath: config.stateDbPath,
       session,
+      ledger: input.compact ? ledger.summary : ledger,
       decisionCount: decisions.length,
       decisions: input.compact ? decisions.map(compactStoredAutoTradingDecision) : decisions
     });

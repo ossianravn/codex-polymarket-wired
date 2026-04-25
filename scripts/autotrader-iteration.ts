@@ -85,9 +85,10 @@ function renderSummary(result: Awaited<ReturnType<typeof runAutoTradingIteration
     `Mode: ${result.summary.mode}`,
     `Risk: ${result.summary.riskProfile}`,
     `Budget: $${result.summary.spentUsdc.toFixed(2)} spent, $${result.summary.remainingBudgetUsdc.toFixed(2)} remaining / $${result.summary.budgetUsdc.toFixed(2)} total`,
-    `Paper PnL: $${result.summary.unrealizedPnlUsdc.toFixed(2)} unrealized across ${result.summary.openPositions} open positions`,
+    `Paper PnL: $${result.summary.unrealizedPnlUsdc.toFixed(2)} unrealized, $${result.summary.realizedPnlUsdc.toFixed(2)} realized, $${result.summary.totalPnlUsdc.toFixed(2)} total across ${result.summary.openPositions} open positions`,
     `This iteration: $${result.summary.proposedBudgetUsdc.toFixed(2)} proposed`,
-    `Orders: ${result.summary.proposedOrders}; research: ${result.summary.researchRequired}; blocked: ${result.summary.blocked}`,
+    `Orders: ${result.summary.proposedOrders} buy, ${result.summary.exitOrders} exit; research: ${result.summary.researchRequired}; blocked: ${result.summary.blocked}`,
+    `Risk blocked new buys: ${result.summary.riskBlockedNewBuys ? "yes" : "no"}`,
     `Next run: ${result.summary.nextRunAt ?? "unknown"}`,
     ...(lines.length > 0 ? ["Top decisions:", ...lines] : ["Top decisions: none"])
   ].join("\n");

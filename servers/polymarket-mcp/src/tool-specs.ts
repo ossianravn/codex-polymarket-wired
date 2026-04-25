@@ -282,7 +282,7 @@ export const TOOLS: ToolSpec[] = [
     name: "start_auto_trading_session",
     access: "write",
     description:
-      "Create an autonomous trading mandate from budget, timeframe, and risk profile, then persist the first paper decision iteration. This plans proposed paper orders only; it does not submit live orders.",
+      "Create an autonomous trading mandate from budget, timeframe, and risk profile, then persist the first paper decision iteration. This plans paper entries/exits only; it does not submit live orders.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -297,6 +297,10 @@ export const TOOLS: ToolSpec[] = [
         max_market_horizon_hours: { type: "number", exclusiveMinimum: 0 },
         min_liquidity_usdc: { type: "number", minimum: 0 },
         max_spread_cents: { type: "number", exclusiveMinimum: 0 },
+        stop_loss_usdc: { type: "number", minimum: 0 },
+        take_profit_pct: { type: "number", exclusiveMinimum: 0 },
+        position_stop_loss_pct: { type: "number", exclusiveMinimum: 0 },
+        time_exit_hours: { type: "number", minimum: 0 },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
         compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }
       },
@@ -307,7 +311,7 @@ export const TOOLS: ToolSpec[] = [
     name: "run_auto_trading_iteration",
     access: "write",
     description:
-      "Run another paper planning iteration for an existing autonomous trading session and persist its decisions plus next-check schedule.",
+      "Run another paper planning iteration for an existing autonomous trading session and persist entry/exit decisions plus next-check schedule.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -323,7 +327,7 @@ export const TOOLS: ToolSpec[] = [
     name: "get_auto_trading_session",
     access: "read",
     description:
-      "Return an autonomous trading session mandate and its latest persisted paper decisions.",
+      "Return an autonomous trading session mandate, paper ledger summary, and latest persisted paper decisions.",
     inputSchema: {
       type: "object",
       additionalProperties: false,

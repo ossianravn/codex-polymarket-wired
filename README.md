@@ -26,7 +26,7 @@ It is not a blind auto-trader. The repo is built around a preview-first, statefu
 - `packages/market-universe/`
   Full-universe ingestion, deterministic first-pass facets and scores, candidate profiles, and selective CLOB enrichment.
 - `packages/auto-trader/`
-  Paper-mode autonomous trading sessions that convert budget, timeframe, and risk profile into persisted decisions, fills, and marked paper positions.
+  Paper-mode autonomous trading sessions that convert budget, timeframe, and risk profile into persisted decisions, fills, marked paper positions, exits, and realized paper PnL.
 - `packages/policy-engine/`
   Risk-limit and execution-policy checks, including thesis-level caps.
 - `packages/state-store/`
@@ -106,7 +106,7 @@ Universe discovery is read-only. It does not place or preview trades.
 
 ## Autonomous paper trading
 
-Use `autotrader:once` or the MCP auto-trading tools to start a paper trading session from a budget, timeframe, and risk profile. The planner filters the latest persisted universe run by end date, liquidity, spread, ambiguity, and risk posture, then records proposed paper orders, idempotent paper fills, marked paper positions, and next-check times in SQLite.
+Use `autotrader:once` or the MCP auto-trading tools to start a paper trading session from a budget, timeframe, and risk profile. The planner filters the latest persisted universe run by end date, liquidity, spread, ambiguity, and risk posture, then records proposed paper orders, idempotent paper fills, marked paper positions, exit decisions, realized paper PnL, and next-check times in SQLite.
 
 ```bash
 npm run autotrader:once -- --budget-usdc 50 --timeframe-hours 72 --risk-profile balanced
