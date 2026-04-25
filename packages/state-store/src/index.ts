@@ -2144,7 +2144,11 @@ export class StateStore {
       }
       this.db.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original write failure if SQLite already aborted the transaction.
+      }
       throw error;
     }
 
