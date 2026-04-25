@@ -45,6 +45,7 @@
     "autotrader:once": "tsx ./scripts/autotrader-iteration.ts",
     "autotrader:agent-loop": "tsx ./scripts/autotrader-agent-loop.ts",
     "autotrader:agent-command": "tsx ./scripts/autotrader-agent-command.ts",
+    "autotrader:paper-agent-once": "tsx ./scripts/autotrader-paper-agent-once.ts",
     "autotrader:simulate": "tsx ./scripts/autotrader-simulation.ts"
   },
   "devDependencies": {
