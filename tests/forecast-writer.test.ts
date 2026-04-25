@@ -273,6 +273,10 @@ test("forecast writer does not treat ordinary multi-market events as exclusive f
       }
     });
 
+    assert.equal(result.summary.proposedOrders, 0);
+    assert.equal(result.candidates[0]?.action, "research_required");
+    assert.equal(result.summary.blockerCounts.independent_forecast_screening_only, 1);
+    assert.equal(result.candidates[0]?.blockers.includes("independent_forecast_screening_only"), true);
     assert.notEqual(result.summary.blockerCounts.independent_forecast_low_confidence_screening, 1);
     assert.equal(result.candidates[0]?.blockers.includes("independent_forecast_low_confidence_screening"), false);
   });
@@ -645,6 +649,36 @@ test("forecast writer lets paper auto-trader propose entries under forecast gate
     assert.equal(before.summary.proposedOrders, 0);
     assert.equal(before.candidates[0]?.action, "research_required");
 
+    store.recordResearchRun({
+      marketKey: "condition:paper-ready",
+      title: "Paper ready research fixture",
+      question: "Will Paper ready resolve yes?",
+      thesis: "Independent non-venue evidence supports a materially higher fair value than the stale base prior.",
+      fairValueLow: 0.42,
+      fairValueBase: 0.5,
+      fairValueHigh: 0.58,
+      supportsYes: [
+        {
+          source: "official-event-source",
+          title: "Catalyst confirms stronger yes case",
+          summary: "The relevant official source indicates the yes outcome is materially more likely than a generic prior.",
+          stance: "supports_yes",
+          confidence: "0.75"
+        }
+      ],
+      supportsNo: [
+        {
+          source: "official-counter-source",
+          title: "Remaining uncertainty",
+          summary: "A material counter-case remains, but it is weaker than the affirmative evidence.",
+          stance: "supports_no",
+          confidence: "0.55"
+        }
+      ],
+      openQuestions: ["Whether the catalyst changes before resolution."],
+      providers: ["official-event-source", "official-counter-source"],
+      completedAt: now.toISOString()
+    });
     runIndependentForecastWriter(store, { runId, now, limit: 10 });
     const after = runAutoTradingIteration(store, {
       now,

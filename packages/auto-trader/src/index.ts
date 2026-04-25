@@ -1014,10 +1014,14 @@ function evaluateIndependentForecastEdge(
   if (forecast.sealed !== true) {
     blockers.push("independent_forecast_not_sealed");
   }
-  if (mandate.mode !== "paper" && forecast.method === "screening_forecast_v0") {
-    blockers.push("independent_forecast_screening_only");
-  }
   const forecastEvidence = asRecord(forecast.evidence);
+  if (forecast.method === "screening_forecast_v0") {
+    blockers.push("independent_forecast_screening_only");
+    reasonCodes.push("forecast_gate:screening_only");
+    if (typeof forecastEvidence?.confidenceTier === "string") {
+      reasonCodes.push(`forecast_confidence_tier:${forecastEvidence.confidenceTier}`);
+    }
+  }
   if (
     mandate.mode === "paper" &&
     forecast.method === "screening_forecast_v0" &&
