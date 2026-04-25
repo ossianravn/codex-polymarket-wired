@@ -1,0 +1,175 @@
+import { readFile, writeFile } from "node:fs/promises";
+import process from "node:process";
+
+import {
+  buildResearchEvidenceBundles,
+  buildResearchEvidenceTemplate,
+  runIndependentForecastWriter,
+  runResearchRequestWorker,
+  type ResearchEvidenceTemplateResult,
+  type ResearchRequestEvidenceTemplate,
+  type ResearchSourcePack
+} from "../packages/auto-trader/src/index.js";
+import { loadRuntimeConfig } from "../packages/polymarket-core/src/index.js";
+import { openStateStore } from "../packages/state-store/src/index.js";
+
+interface CliOptions {
+  dbPath?: string;
+  sessionId?: string;
+  limit?: number;
+  sourceFile?: string;
+  templateFile?: string;
+  outFile?: string;
+  record: boolean;
+  writeForecasts: boolean;
+  forecastRunId?: string;
+  overwriteForecasts: boolean;
+  json: boolean;
+}
+
+function readArg(name: string, argv = process.argv.slice(2)): string | undefined {
+  const prefixed = `--${name}=`;
+  const inline = argv.find((arg) => arg.startsWith(prefixed));
+  if (inline) {
+    return inline.slice(prefixed.length);
+  }
+  const index = argv.indexOf(`--${name}`);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function readNumberArg(name: string): number | undefined {
+  const value = readArg(name);
+  if (value === undefined) {
+    return undefined;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function parseCliArgs(): CliOptions {
+  return {
+    dbPath: readArg("db") ?? process.env.AUTOTRADER_STATE_DB_PATH,
+    sessionId: readArg("session-id") ?? process.env.AUTOTRADER_SESSION_ID,
+    limit: readNumberArg("limit"),
+    sourceFile: readArg("source-file") ?? process.env.AUTOTRADER_RESEARCH_SOURCE_FILE,
+    templateFile: readArg("template-file") ?? process.env.AUTOTRADER_RESEARCH_TEMPLATE_FILE,
+    outFile: readArg("out") ?? readArg("evidence-file") ?? process.env.AUTOTRADER_RESEARCH_EVIDENCE_FILE,
+    record: process.argv.includes("--record"),
+    writeForecasts: process.argv.includes("--write-forecasts"),
+    forecastRunId: readArg("run-id") ?? process.env.AUTOTRADER_FORECAST_RUN_ID,
+    overwriteForecasts: process.argv.includes("--overwrite-forecasts"),
+    json: process.argv.includes("--json")
+  };
+}
+
+async function readJsonFile<T>(filePath: string): Promise<T> {
+  return JSON.parse(await readFile(filePath, "utf8")) as T;
+}
+
+function sourcePacksFromJson(parsed: unknown): ResearchSourcePack[] {
+  if (Array.isArray(parsed)) {
+    return parsed as ResearchSourcePack[];
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { sourcePacks?: unknown }).sourcePacks)) {
+    return (parsed as { sourcePacks: ResearchSourcePack[] }).sourcePacks;
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { packs?: unknown }).packs)) {
+    return (parsed as { packs: ResearchSourcePack[] }).packs;
+  }
+  throw new Error("Source file must be an array or an object with sourcePacks array.");
+}
+
+function templatesFromJson(parsed: unknown): ResearchEvidenceTemplateResult | ResearchRequestEvidenceTemplate[] {
+  if (Array.isArray(parsed)) {
+    return parsed as ResearchRequestEvidenceTemplate[];
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { templates?: unknown }).templates)) {
+    return parsed as ResearchEvidenceTemplateResult;
+  }
+  throw new Error("Template file must be a template result object or templates array.");
+}
+
+function renderText(result: {
+  provider: ReturnType<typeof buildResearchEvidenceBundles>;
+  research?: ReturnType<typeof runResearchRequestWorker>;
+  forecasts?: ReturnType<typeof runIndependentForecastWriter>;
+}): string {
+  const lines = [
+    `Research provider: ${result.provider.generatedAt}`,
+    `Templates scanned: ${result.provider.scannedTemplates}`,
+    `Source packs: ${result.provider.sourcePacks}`,
+    `Evidence bundles ready: ${result.provider.writtenBundles}`,
+    `Skipped missing source: ${result.provider.skippedMissingSourcePack}`,
+    `Skipped invalid: ${result.provider.skippedInvalid}`
+  ];
+  if (result.research) {
+    lines.push(
+      `Recorded research runs: ${result.research.recordedResearchRuns}`,
+      `Invalid evidence records: ${result.research.skippedInvalidEvidence}`
+    );
+  }
+  if (result.forecasts) {
+    lines.push(
+      `Forecasts written: ${result.forecasts.written}`,
+      `Forecasts skipped existing: ${result.forecasts.skippedExisting}`
+    );
+  }
+  const issues = result.provider.issues.slice(0, 10).map((issue) =>
+    `- [${issue.status}] ${issue.marketKey}: ${issue.reasonCodes.join(", ")}`
+  );
+  return [...lines, ...(issues.length > 0 ? ["Issues:", ...issues] : [])].join("\n");
+}
+
+async function main(): Promise<void> {
+  const options = parseCliArgs();
+  if (!options.sourceFile) {
+    throw new Error("Missing --source-file with independent research source packs.");
+  }
+  const config = loadRuntimeConfig();
+  const dbPath = options.dbPath ?? config.stateDbPath;
+  const sourcePacks = sourcePacksFromJson(await readJsonFile<unknown>(options.sourceFile));
+  const store = openStateStore(dbPath);
+  try {
+    const templates = options.templateFile
+      ? templatesFromJson(await readJsonFile<unknown>(options.templateFile))
+      : buildResearchEvidenceTemplate(store, {
+        sessionId: options.sessionId,
+        limit: options.limit
+      });
+    const provider = buildResearchEvidenceBundles({
+      templates,
+      sourcePacks,
+      automationName: "autotrader-research-provider"
+    });
+    if (options.outFile) {
+      await writeFile(options.outFile, `${JSON.stringify({ evidenceBundles: provider.evidenceBundles }, null, 2)}\n`, "utf8");
+    }
+    const research = options.record
+      ? runResearchRequestWorker(store, {
+        sessionId: options.sessionId,
+        limit: options.limit,
+        evidenceBundles: provider.evidenceBundles
+      })
+      : undefined;
+    const forecasts = options.writeForecasts
+      ? runIndependentForecastWriter(store, {
+        runId: options.forecastRunId,
+        limit: options.limit,
+        overwrite: options.overwriteForecasts
+      })
+      : undefined;
+    const result = { provider, research, forecasts };
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(renderText(result));
+    }
+  } finally {
+    store.close();
+  }
+}
+
+main().catch((error) => {
+  console.error("autotrader-research-provider error:", error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
