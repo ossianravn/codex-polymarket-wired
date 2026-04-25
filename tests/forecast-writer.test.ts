@@ -179,6 +179,69 @@ test("forecast writer lets paper auto-trader propose entries under forecast gate
   });
 });
 
+test("forecast writer covers ending-soon planner candidates beyond trade-score leaders", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    const market = (input: { key: string; endHours: number; tradeScore: number }) => ({
+      runId,
+      marketKey: input.key,
+      conditionId: input.key,
+      slug: input.key,
+      title: input.key,
+      tags: ["test"],
+      outcomes: ["Yes", "No"],
+      clobTokenIds: [`${input.key}:yes`, `${input.key}:no`],
+      yesTokenId: `${input.key}:yes`,
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, input.endHours),
+      liquidityUsd: 25_000,
+      volume24hUsd: 20_000,
+      impliedProb: 0.2,
+      bestBid: 0.2,
+      bestAsk: 0.22,
+      midpoint: 0.21,
+      spreadCents: 2,
+      structuralType: "single-binary",
+      categoryGroup: "politics",
+      modelabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 10,
+      riskScore: 5,
+      researchPriorityScore: 95,
+      tradeOpportunityScore: input.tradeScore,
+      tradabilityScore: 95,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {}
+    });
+    store.recordUniverseMarkets(runId, [
+      ...Array.from({ length: 80 }, (_, index) => market({
+        key: `condition:trade-leader-${index}`,
+        endHours: 24 * 30,
+        tradeScore: 100 - index * 0.01
+      })),
+      market({ key: "condition:ending-soon", endHours: 12, tradeScore: 60 })
+    ]);
+
+    const result = runIndependentForecastWriter(store, { runId, now, limit: 100 });
+
+    assert.equal(result.forecasts.some((forecast) => forecast.marketKey === "condition:ending-soon"), true);
+    const endingSoon = store.getUniverseMarket(runId, "condition:ending-soon");
+    assert.ok((endingSoon?.rawJson as Record<string, unknown>).independentForecast);
+  });
+});
+
 test("screening forecasts do not unlock live-mode entries", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-25T12:00:00.000Z");

@@ -71,8 +71,10 @@ import {
 import {
   buildAutoTradingExecutionGate,
   compactAutoTradingIterationResult,
+  normalizeAutoTradingMandate,
   runIndependentForecastWriter,
   runAutoTradingIteration,
+  type AutoTradingMandateInput,
   type AutoTradingRiskProfile
 } from "../../../packages/auto-trader/src/index.js";
 import {
@@ -1702,32 +1704,34 @@ server.registerTool(
   async (input) => {
     const config = loadRuntimeConfig();
     const store = currentStateStore(config);
+    const mandateInput = {
+      name: input.name,
+      budgetUsdc: input.budget_usdc,
+      timeframeHours: input.timeframe_hours,
+      riskProfile: input.risk_profile as AutoTradingRiskProfile,
+      mode: input.mode,
+      maxSingleOrderUsdc: input.max_single_order_usdc,
+      maxOpenPositions: input.max_open_positions,
+      maxMarketHorizonHours: input.max_market_horizon_hours,
+      minLiquidityUsdc: input.min_liquidity_usdc,
+      maxSpreadCents: input.max_spread_cents,
+      stopLossUsdc: input.stop_loss_usdc,
+      takeProfitPct: input.take_profit_pct,
+      positionStopLossPct: input.position_stop_loss_pct,
+      positionStopLossGraceMinutes: input.position_stop_loss_grace_minutes,
+      paperReentryCooldownMinutes: input.paper_reentry_cooldown_minutes,
+      timeExitHours: input.time_exit_hours
+    } satisfies AutoTradingMandateInput;
+    const mandate = normalizeAutoTradingMandate(mandateInput);
     const forecastWriter = input.auto_forecast
       ? runIndependentForecastWriter(store, {
-        limit: Math.max(input.limit, 100),
-        minLiquidityUsdc: input.min_liquidity_usdc,
-        maxSpreadCents: input.max_spread_cents
+        limit: Math.max(input.limit * 80, 1_000),
+        minLiquidityUsdc: Math.max(0, mandate.minLiquidityUsdc * 0.5),
+        maxSpreadCents: Math.max(mandate.maxSpreadCents, mandate.maxSpreadCents + 2)
       })
       : undefined;
     const result = runAutoTradingIteration(store, {
-      mandate: {
-        name: input.name,
-        budgetUsdc: input.budget_usdc,
-        timeframeHours: input.timeframe_hours,
-        riskProfile: input.risk_profile as AutoTradingRiskProfile,
-        mode: input.mode,
-        maxSingleOrderUsdc: input.max_single_order_usdc,
-        maxOpenPositions: input.max_open_positions,
-        maxMarketHorizonHours: input.max_market_horizon_hours,
-        minLiquidityUsdc: input.min_liquidity_usdc,
-        maxSpreadCents: input.max_spread_cents,
-        stopLossUsdc: input.stop_loss_usdc,
-        takeProfitPct: input.take_profit_pct,
-        positionStopLossPct: input.position_stop_loss_pct,
-        positionStopLossGraceMinutes: input.position_stop_loss_grace_minutes,
-        paperReentryCooldownMinutes: input.paper_reentry_cooldown_minutes,
-        timeExitHours: input.time_exit_hours
-      },
+      mandate: mandateInput,
       limit: input.limit
     });
     store.recordAutomationRun({
@@ -1790,8 +1794,16 @@ server.registerTool(
   async (input) => {
     const config = loadRuntimeConfig();
     const store = currentStateStore(config);
+    const existingSession = store.getAutoTradingSession(input.session_id);
+    const mandate = existingSession
+      ? normalizeAutoTradingMandate(existingSession.mandate as unknown as AutoTradingMandateInput)
+      : undefined;
     const forecastWriter = input.auto_forecast
-      ? runIndependentForecastWriter(store, { limit: Math.max(input.limit, 100) })
+      ? runIndependentForecastWriter(store, {
+        limit: Math.max(input.limit * 80, 1_000),
+        minLiquidityUsdc: mandate ? Math.max(0, mandate.minLiquidityUsdc * 0.5) : undefined,
+        maxSpreadCents: mandate ? Math.max(mandate.maxSpreadCents, mandate.maxSpreadCents + 2) : undefined
+      })
       : undefined;
     const result = runAutoTradingIteration(store, {
       sessionId: input.session_id,

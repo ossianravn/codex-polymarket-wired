@@ -47,6 +47,54 @@ export interface ForecastWriterResult {
   }>;
 }
 
+function marketIdentity(market: Record<string, unknown>): string {
+  for (const key of ["marketKey", "conditionId", "slug", "title"]) {
+    const value = market[key];
+    if (typeof value === "string" && value.trim()) {
+      return `${key}:${value}`;
+    }
+  }
+  return JSON.stringify(market);
+}
+
+function mergeMarketPools(pools: Array<Array<Record<string, unknown>>>): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const merged: Array<Record<string, unknown>> = [];
+  for (const pool of pools) {
+    for (const market of pool) {
+      const identity = marketIdentity(market);
+      if (seen.has(identity)) {
+        continue;
+      }
+      seen.add(identity);
+      merged.push(market);
+    }
+  }
+  return merged;
+}
+
+function listUniverseMarketsPaged(
+  store: StateStore,
+  filters: Parameters<StateStore["listUniverseMarkets"]>[0],
+  totalLimit: number
+): Array<Record<string, unknown>> {
+  const output: Array<Record<string, unknown>> = [];
+  const pageSize = 500;
+  const maxRows = Math.max(1, Math.min(5_000, totalLimit));
+  for (let offset = 0; output.length < maxRows; offset += pageSize) {
+    const page = store.listUniverseMarkets({
+      ...filters,
+      limit: Math.min(pageSize, maxRows - output.length),
+      offset
+    }).markets;
+    output.push(...page);
+    if (page.length < pageSize) {
+      break;
+    }
+  }
+  return output;
+}
+
 function asNumber(value: unknown): number | undefined {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
@@ -106,7 +154,7 @@ function hasExistingForecast(market: Record<string, unknown>): boolean {
   return Boolean(asRecord(asRecord(market.rawJson)?.independentForecast));
 }
 
-function marketEligibleForForecast(market: Record<string, unknown>): boolean {
+function marketEligibleForForecast(market: Record<string, unknown>, now: Date): boolean {
   if (market.active === false || market.closed === true || market.acceptingOrders === false) {
     return false;
   }
@@ -114,7 +162,7 @@ function marketEligibleForForecast(market: Record<string, unknown>): boolean {
     return false;
   }
   const endDate = typeof market.endDate === "string" ? Date.parse(market.endDate) : Number.NaN;
-  return Number.isFinite(endDate) && endDate > Date.now() - 60 * 1000;
+  return Number.isFinite(endDate) && endDate > now.getTime() - 60 * 1000;
 }
 
 export function buildIndependentForecastArtifact(
@@ -199,14 +247,19 @@ export function runIndependentForecastWriter(
     };
   }
 
-  const limit = Math.max(1, Math.min(1_000, input.limit ?? 100));
-  const markets = store.listUniverseMarkets({
+  const limit = Math.max(1, Math.min(5_000, input.limit ?? 100));
+  const perPoolLimit = Math.max(500, limit);
+  const baseFilters = {
     runId,
     minLiquidityUsdc: input.minLiquidityUsdc,
     maxSpreadCents: input.maxSpreadCents,
-    sort: "trade_opportunity_desc",
-    limit
-  }).markets;
+    limit: 500
+  } as const;
+  const markets = mergeMarketPools([
+    listUniverseMarketsPaged(store, { ...baseFilters, sort: "trade_opportunity_desc" }, perPoolLimit),
+    listUniverseMarketsPaged(store, { ...baseFilters, sort: "ending_soon" }, perPoolLimit),
+    listUniverseMarketsPaged(store, { ...baseFilters, sort: "volume_24h_desc" }, perPoolLimit)
+  ]);
   const result: ForecastWriterResult = {
     runId,
     generatedAt: now.toISOString(),
@@ -219,7 +272,7 @@ export function runIndependentForecastWriter(
 
   for (const market of markets) {
     const marketKey = typeof market.marketKey === "string" ? market.marketKey : undefined;
-    if (!marketKey || !marketEligibleForForecast(market)) {
+    if (!marketKey || !marketEligibleForForecast(market, now)) {
       result.skippedIneligible += 1;
       continue;
     }

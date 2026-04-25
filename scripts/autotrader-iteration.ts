@@ -2,8 +2,10 @@ import process from "node:process";
 
 import {
   compactAutoTradingIterationResult,
+  normalizeAutoTradingMandate,
   runIndependentForecastWriter,
   runAutoTradingIteration,
+  type AutoTradingMandateInput,
   type AutoTradingRiskProfile
 } from "../packages/auto-trader/src/index.js";
 import { loadRuntimeConfig } from "../packages/polymarket-core/src/index.js";
@@ -106,20 +108,27 @@ async function main(): Promise<void> {
   }
   const config = loadRuntimeConfig();
   const store = openStateStore(config.stateDbPath);
+  const existingSession = options.sessionId ? store.getAutoTradingSession(options.sessionId) : undefined;
+  const mandateInput = existingSession
+    ? existingSession.mandate as unknown as AutoTradingMandateInput
+    : {
+      name: options.name,
+      budgetUsdc: options.budgetUsdc as number,
+      timeframeHours: options.timeframeHours as number,
+      riskProfile: options.riskProfile as AutoTradingRiskProfile,
+      mode: options.mode ?? "paper"
+    };
+  const mandate = normalizeAutoTradingMandate(mandateInput);
   const forecastWriter = options.autoForecast
-    ? runIndependentForecastWriter(store, { limit: Math.max(options.limit, 100) })
+    ? runIndependentForecastWriter(store, {
+      limit: Math.max(options.limit * 80, 1_000),
+      minLiquidityUsdc: Math.max(0, mandate.minLiquidityUsdc * 0.5),
+      maxSpreadCents: Math.max(mandate.maxSpreadCents, mandate.maxSpreadCents + 2)
+    })
     : undefined;
   const result = runAutoTradingIteration(store, {
     sessionId: options.sessionId,
-    mandate: options.sessionId
-      ? undefined
-      : {
-        name: options.name,
-        budgetUsdc: options.budgetUsdc as number,
-        timeframeHours: options.timeframeHours as number,
-        riskProfile: options.riskProfile as AutoTradingRiskProfile,
-        mode: options.mode ?? "paper"
-      },
+    mandate: options.sessionId ? undefined : mandateInput,
     limit: options.limit
   });
   store.recordAutomationRun({
