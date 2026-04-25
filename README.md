@@ -144,6 +144,8 @@ Use `npm run autotrader:heartbeat` for the recurring no-submit runner. It resume
 
 Heartbeat automations can configure the mandate through environment variables such as `AUTOTRADER_BUDGET_USDC`, `AUTOTRADER_TIMEFRAME_HOURS`, `AUTOTRADER_RISK_PROFILE`, `AUTOTRADER_SESSION_NAME`, `AUTOTRADER_STATE_DB_PATH`, `AUTOTRADER_EXECUTOR_LIMIT`, and `AUTOTRADER_PREVIEW_LIMIT`. The runner still forces `POLYMARKET_ENABLE_TRADING=false` internally.
 
+Each heartbeat also writes durable observation state to `state/autotrader-heartbeat.jsonl` and `state/autotrader-heartbeat-latest.json` by default. Use `AUTOTRADER_OBSERVATION_LOG_PATH` and `AUTOTRADER_LATEST_REPORT_PATH` to override those paths. The `observation.materialChanges` field is intended for scheduled reports.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:

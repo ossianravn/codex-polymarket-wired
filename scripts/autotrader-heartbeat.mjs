@@ -1,4 +1,6 @@
 import process from "node:process";
+import path from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -56,7 +58,9 @@ function parseArgs(argv = process.argv.slice(2)) {
     stopLossUsdc: envNumber("AUTOTRADER_STOP_LOSS_USDC", 10),
     limit: envNumber("AUTOTRADER_LIMIT", 25),
     executorLimit: envNumber("AUTOTRADER_EXECUTOR_LIMIT", 5),
-    previewLimit: envNumber("AUTOTRADER_PREVIEW_LIMIT", 1)
+    previewLimit: envNumber("AUTOTRADER_PREVIEW_LIMIT", 1),
+    observationLogPath: envString("AUTOTRADER_OBSERVATION_LOG_PATH", "state/autotrader-heartbeat.jsonl"),
+    latestReportPath: envString("AUTOTRADER_LATEST_REPORT_PATH", "state/autotrader-heartbeat-latest.json")
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -165,6 +169,16 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.previewLimit = Number(arg.split("=")[1]);
     } else if (arg === "--no-preview") {
       options.previewLimit = 0;
+    } else if (arg === "--observation-log") {
+      options.observationLogPath = next;
+      index += 1;
+    } else if (arg.startsWith("--observation-log=")) {
+      options.observationLogPath = arg.split("=")[1];
+    } else if (arg === "--latest-report") {
+      options.latestReportPath = next;
+      index += 1;
+    } else if (arg.startsWith("--latest-report=")) {
+      options.latestReportPath = arg.split("=")[1];
     }
   }
   return options;
@@ -243,6 +257,91 @@ function summarizeExecutor(output) {
     }, {}),
     previewIds: results.map((item) => item?.previewId).filter(Boolean),
     submitted: results.filter((item) => item?.execution?.status === "submitted").length
+  };
+}
+
+function absolutePath(value) {
+  return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
+}
+
+async function readJsonIfExists(filePath) {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function compactObservation(report) {
+  return {
+    generatedAt: new Date().toISOString(),
+    stateDbPath: report.environment.stateDbPath,
+    sessionId: report.summary?.sessionId,
+    startedThisRun: report.summary?.startedThisRun,
+    dryRunCandidates: report.summary?.dryRunCandidates,
+    previewAttempts: report.summary?.previewAttempts,
+    previewIds: report.summary?.previewIds ?? [],
+    submittedOrders: report.summary?.submittedOrders,
+    noSubmitInvariantHeld: report.summary?.noSubmitInvariantHeld,
+    nextRunAt: report.summary?.nextRunAt,
+    actionCounts: report.iteration?.actionCounts ?? {},
+    universeTotalMarkets: report.universe?.totalMarkets,
+    universeRunId: report.universe?.runId
+  };
+}
+
+function observationChanges(previous, current) {
+  if (!previous) {
+    return ["first_observation"];
+  }
+  const changes = [];
+  if (previous.sessionId !== current.sessionId) {
+    changes.push("session_changed");
+  }
+  if (current.startedThisRun) {
+    changes.push("session_started");
+  }
+  if (previous.dryRunCandidates !== current.dryRunCandidates) {
+    changes.push("candidate_count_changed");
+  }
+  if (previous.previewAttempts !== current.previewAttempts) {
+    changes.push("preview_attempt_count_changed");
+  }
+  const previousPreviewIds = new Set(previous.previewIds ?? []);
+  const newPreviewIds = (current.previewIds ?? []).filter((previewId) => !previousPreviewIds.has(previewId));
+  if (newPreviewIds.length > 0) {
+    changes.push("new_preview_created");
+  }
+  if ((current.submittedOrders ?? 0) > 0) {
+    changes.push("submitted_orders_detected");
+  }
+  if (current.noSubmitInvariantHeld === false) {
+    changes.push("no_submit_invariant_failed");
+  }
+  return changes;
+}
+
+async function persistObservation(report, options) {
+  const latestPath = absolutePath(options.latestReportPath);
+  const logPath = absolutePath(options.observationLogPath);
+  const previous = await readJsonIfExists(latestPath);
+  const current = compactObservation(report);
+  const materialChanges = observationChanges(previous, current);
+  const record = {
+    ...current,
+    materialChanges
+  };
+  await mkdir(path.dirname(latestPath), { recursive: true });
+  await mkdir(path.dirname(logPath), { recursive: true });
+  await writeFile(latestPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  await writeFile(logPath, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a" });
+  return {
+    latestReportPath: latestPath,
+    observationLogPath: logPath,
+    materialChanges
   };
 }
 
@@ -356,6 +455,7 @@ async function main() {
     iteration: null,
     dryRunExecutor: null,
     previewExecutor: null,
+    observation: null,
     summary: null
   };
 
@@ -449,6 +549,7 @@ async function main() {
     if (!report.summary.noSubmitInvariantHeld) {
       throw new Error("Heartbeat invariant failed: executor submitted an order while POLYMARKET_ENABLE_TRADING=false.");
     }
+    report.observation = await persistObservation(report, options);
   } finally {
     await transport.close().catch(() => {});
   }

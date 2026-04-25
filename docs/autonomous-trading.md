@@ -124,6 +124,8 @@ Use `npm run autotrader:heartbeat` for recurring observation. It runs the same M
 
 The heartbeat runner accepts environment-variable configuration for automation contexts: `AUTOTRADER_BUDGET_USDC`, `AUTOTRADER_TIMEFRAME_HOURS`, `AUTOTRADER_RISK_PROFILE`, `AUTOTRADER_SESSION_NAME`, `AUTOTRADER_STATE_DB_PATH`, `AUTOTRADER_EXECUTOR_LIMIT`, `AUTOTRADER_PREVIEW_LIMIT`, and related universe filter variables. This avoids relying on shell-specific npm argument forwarding.
 
+Heartbeat observations are persisted to `state/autotrader-heartbeat.jsonl` and `state/autotrader-heartbeat-latest.json` by default. Override with `AUTOTRADER_OBSERVATION_LOG_PATH` and `AUTOTRADER_LATEST_REPORT_PATH`. Scheduled monitors should key off `observation.materialChanges`.
+
 ## MCP tools
 
 - `start_auto_trading_session`
