@@ -391,6 +391,16 @@ export interface StoredPaperTradingExecutionReport {
   recentOrders: StoredPaperTradingOrderRecord[];
 }
 
+export interface StoredPaperTradingResetResult {
+  sessionId: string;
+  generatedAt: string;
+  deletedOrders: number;
+  deletedFills: number;
+  deletedPositions: number;
+  deletedDecisions: number;
+  sessionStatus?: string;
+}
+
 export interface StoredUniverseRunInput {
   runId?: string;
   startedAt?: string;
@@ -3092,6 +3102,75 @@ export class StateStore {
       SET status = ?, metadata_json = ?, updated_at = ?
       WHERE session_id = ?
     `).run(status, jsonString(mergedMetadata, {}), nowIso(), sessionId);
+  }
+
+  resetPaperTradingSession(
+    sessionId: string,
+    options?: {
+      clearDecisions?: boolean;
+      status?: "active" | "paused" | "completed" | "stopped";
+      metadata?: Record<string, unknown>;
+    }
+  ): StoredPaperTradingResetResult {
+    const existing = this.getAutoTradingSession(sessionId);
+    if (!existing) {
+      throw new Error(`Unknown auto-trading session ${sessionId}.`);
+    }
+    if (existing.mode !== "paper") {
+      throw new Error(`Refusing to reset non-paper auto-trading session ${sessionId}.`);
+    }
+
+    const deletedOrders = Number(this.db.prepare(`
+      DELETE FROM paper_trading_orders
+      WHERE session_id = ?
+    `).run(sessionId).changes ?? 0);
+    const deletedFills = Number(this.db.prepare(`
+      DELETE FROM paper_trading_fills
+      WHERE session_id = ?
+    `).run(sessionId).changes ?? 0);
+    const deletedPositions = Number(this.db.prepare(`
+      DELETE FROM paper_trading_positions
+      WHERE session_id = ?
+    `).run(sessionId).changes ?? 0);
+    const deletedDecisions = options?.clearDecisions
+      ? Number(this.db.prepare(`
+        DELETE FROM auto_trading_decisions
+        WHERE session_id = ?
+      `).run(sessionId).changes ?? 0)
+      : 0;
+
+    const resetAt = nowIso();
+    const mergedMetadata = {
+      ...existing.metadata,
+      ...(options?.metadata ?? {}),
+      lastPaperLedgerResetAt: resetAt,
+      lastPaperLedgerResetDeletedRows: {
+        orders: deletedOrders,
+        fills: deletedFills,
+        positions: deletedPositions,
+        decisions: deletedDecisions
+      }
+    };
+    this.db.prepare(`
+      UPDATE auto_trading_sessions
+      SET status = ?, metadata_json = ?, updated_at = ?
+      WHERE session_id = ?
+    `).run(
+      options?.status ?? existing.status,
+      jsonString(mergedMetadata, {}),
+      resetAt,
+      sessionId
+    );
+
+    return {
+      sessionId,
+      generatedAt: resetAt,
+      deletedOrders,
+      deletedFills,
+      deletedPositions,
+      deletedDecisions,
+      sessionStatus: options?.status ?? existing.status
+    };
   }
 
   recordAutoTradingDecision(input: StoredAutoTradingDecisionInput): StoredAutoTradingDecisionRecord {

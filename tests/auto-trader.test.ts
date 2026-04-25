@@ -449,6 +449,94 @@ test("auto-trader records missed paper orders without spending ledger budget", a
   });
 });
 
+test("state store resets paper ledger while keeping decision history unless requested", async () => {
+  await withTempStore((store) => {
+    const session = store.createAutoTradingSession({
+      sessionId: "reset-paper-session",
+      status: "active",
+      mode: "paper",
+      riskProfile: "aggressive",
+      budgetUsdc: 10,
+      timeframeHours: 24,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+    const decision = store.recordAutoTradingDecision({
+      sessionId: session.sessionId,
+      iterationId: "iteration-1",
+      marketKey: "condition:reset-test",
+      action: "paper_buy_yes",
+      status: "proposed",
+      allocatedBudgetUsdc: 5,
+      targetPrice: 0.5,
+      reasonCodes: [],
+      blockers: []
+    });
+    store.recordPaperTradingOrder({
+      sessionId: session.sessionId,
+      iterationId: "iteration-1",
+      decisionId: decision.decisionId,
+      marketKey: "condition:reset-test",
+      side: "buy_yes",
+      limitPrice: 0.5,
+      requestedShares: 10,
+      requestedNotionalUsdc: 5,
+      filledShares: 10,
+      filledNotionalUsdc: 5,
+      status: "filled"
+    });
+    store.recordPaperTradingFill({
+      sessionId: session.sessionId,
+      iterationId: "iteration-1",
+      decisionId: decision.decisionId,
+      marketKey: "condition:reset-test",
+      side: "buy_yes",
+      price: 0.5,
+      shares: 10,
+      costUsdc: 5
+    });
+
+    const firstReset = store.resetPaperTradingSession(session.sessionId);
+    assert.equal(firstReset.deletedOrders, 1);
+    assert.equal(firstReset.deletedFills, 1);
+    assert.equal(firstReset.deletedPositions, 1);
+    assert.equal(firstReset.deletedDecisions, 0);
+    assert.equal(store.getPaperTradingLedger(session.sessionId).summary.spentUsdc, 0);
+    assert.equal(store.listAutoTradingDecisions({ sessionId: session.sessionId }).length, 1);
+
+    const secondReset = store.resetPaperTradingSession(session.sessionId, { clearDecisions: true });
+    assert.equal(secondReset.deletedDecisions, 1);
+    assert.equal(store.listAutoTradingDecisions({ sessionId: session.sessionId }).length, 0);
+  });
+});
+
+test("state store refuses to reset non-paper auto-trading sessions", async () => {
+  await withTempStore((store) => {
+    const session = store.createAutoTradingSession({
+      sessionId: "live-session",
+      status: "active",
+      mode: "live_guarded",
+      riskProfile: "aggressive",
+      budgetUsdc: 10,
+      timeframeHours: 24,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "live_guarded"
+      }
+    });
+    assert.throws(
+      () => store.resetPaperTradingSession(session.sessionId),
+      /Refusing to reset non-paper/
+    );
+  });
+});
+
 test("auto-trader exits paper positions on take profit and realizes PnL", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");
