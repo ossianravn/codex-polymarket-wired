@@ -117,6 +117,13 @@ function renderText(status) {
   const actionCounts = latest.actionCounts
     ? Object.entries(latest.actionCounts).map(([key, value]) => `${key}:${value}`).join(", ")
     : "unknown";
+  const hasBudget = Number.isFinite(latest.budgetUsdc) || Number.isFinite(latest.remainingBudgetUsdc);
+  const budgetLine = hasBudget
+    ? `Budget: $${(latest.spentUsdc ?? 0).toFixed(4)} spent, $${(latest.remainingBudgetUsdc ?? 0).toFixed(4)} remaining / $${(latest.budgetUsdc ?? 0).toFixed(4)} total`
+    : "Budget: unknown";
+  const pnlLine = hasBudget
+    ? `Paper PnL: $${(latest.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized, $${(latest.realizedPnlUsdc ?? 0).toFixed(6)} realized, $${(latest.totalPnlUsdc ?? 0).toFixed(6)} total; open positions: ${latest.openPositions ?? "unknown"}`
+    : "Paper PnL: unknown";
   return [
     `Autotrader status: ${latest.noSubmitInvariantHeld ? "safe-no-submit" : "SAFETY VIOLATION"}`,
     `Generated: ${latest.generatedAt}`,
@@ -124,6 +131,9 @@ function renderText(status) {
     `Scheduler: ${latest.schedulerSkipped ? `deferred (${latest.schedulerReason ?? "not_due"}, due in ${latest.schedulerDueInSeconds ?? "unknown"}s)` : (latest.schedulerReason ?? "ran")}`,
     `Material changes: ${changes}`,
     `Candidates: ${latest.dryRunCandidates ?? 0} dry-run; previews: ${latest.previewAttempts ?? 0}; submitted: ${latest.submittedOrders ?? 0}`,
+    budgetLine,
+    pnlLine,
+    `Paper proposals: ${latest.paperBuyProposalCount ?? 0} buy, ${latest.paperExitProposalCount ?? 0} exit`,
     `Preview IDs: ${(latest.previewIds ?? []).join(", ") || "none"}`,
     `Actions: ${actionCounts}`,
     `Next run: ${latest.nextRunAt ?? "unknown"}`,
@@ -146,7 +156,10 @@ function renderDueStatusText(report) {
     `Next run: ${report.nextRunAt ?? "unknown"}`,
     `Notify: ${report.shouldNotify ? "yes" : "no"}`,
     `Material paper changes: ${report.materialPaperChanges.length ? report.materialPaperChanges.join(", ") : "none"}`,
-    `Safety issue: ${report.safetyIssue ? "yes" : "no"}`
+    `Safety issue: ${report.safetyIssue ? "yes" : "no"}`,
+    `Budget: $${(report.spentUsdc ?? 0).toFixed(4)} spent, $${(report.remainingBudgetUsdc ?? 0).toFixed(4)} remaining`,
+    `Open positions: ${report.openPositions ?? "unknown"}; PnL: $${(report.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized, $${(report.realizedPnlUsdc ?? 0).toFixed(6)} realized`,
+    `Paper proposals: ${report.paperBuyProposalCount ?? 0} buy, ${report.paperExitProposalCount ?? 0} exit`
   ].join("\n");
 }
 

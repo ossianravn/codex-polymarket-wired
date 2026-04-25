@@ -117,3 +117,63 @@ test("autotrader due status surfaces material paper changes before nextRunAt", (
   assert.equal(report.shouldNotify, true);
   assert.deepEqual(report.materialPaperChanges, ["candidate_count_changed"]);
 });
+
+test("autotrader due status stays quiet for acknowledged material paper changes", () => {
+  const now = new Date("2026-04-24T12:00:00.000Z");
+  const report = dueStatus(
+    {
+      sessionId: "session-1",
+      nextRunAt: "2026-04-24T12:10:00.000Z",
+      materialChanges: ["candidate_count_changed"],
+      materialChangesAckFingerprint: "candidate_count_changed",
+      noSubmitInvariantHeld: true,
+      submittedOrders: 0
+    },
+    { respectNextRunAt: true, schedulerSlackSeconds: 30 },
+    now
+  );
+
+  assert.equal(report.automationDecision, "quiet");
+  assert.equal(report.shouldRunHeartbeat, false);
+  assert.equal(report.shouldNotify, false);
+  assert.equal(report.materialChangesAcknowledged, true);
+});
+
+test("autotrader due status includes latest paper financial summary", () => {
+  const now = new Date("2026-04-24T12:00:00.000Z");
+  const report = dueStatus(
+    {
+      sessionId: "session-1",
+      nextRunAt: "2026-04-24T12:10:00.000Z",
+      materialChanges: [],
+      noSubmitInvariantHeld: true,
+      submittedOrders: 0,
+      budgetUsdc: 30,
+      spentUsdc: 27.5,
+      remainingBudgetUsdc: 2.5,
+      unrealizedPnlUsdc: -0.25,
+      realizedPnlUsdc: 1.75,
+      totalPnlUsdc: 1.5,
+      openPositions: 4,
+      paperBuyProposalCount: 1,
+      paperExitProposalCount: 2,
+      paperBuyProposals: [{ marketKey: "buy-1" }],
+      paperExitProposals: [{ marketKey: "exit-1" }, { marketKey: "exit-2" }]
+    },
+    { respectNextRunAt: true, schedulerSlackSeconds: 30 },
+    now
+  );
+
+  assert.equal(report.automationDecision, "quiet");
+  assert.equal(report.budgetUsdc, 30);
+  assert.equal(report.spentUsdc, 27.5);
+  assert.equal(report.remainingBudgetUsdc, 2.5);
+  assert.equal(report.unrealizedPnlUsdc, -0.25);
+  assert.equal(report.realizedPnlUsdc, 1.75);
+  assert.equal(report.totalPnlUsdc, 1.5);
+  assert.equal(report.openPositions, 4);
+  assert.equal(report.paperBuyProposalCount, 1);
+  assert.equal(report.paperExitProposalCount, 2);
+  assert.deepEqual(report.paperBuyProposals, [{ marketKey: "buy-1" }]);
+  assert.deepEqual(report.paperExitProposals, [{ marketKey: "exit-1" }, { marketKey: "exit-2" }]);
+});

@@ -274,6 +274,57 @@ function summarizeExecutor(output) {
   };
 }
 
+function finiteNumber(value) {
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function paperDecisionDetails(decisions = [], action) {
+  return decisions
+    .filter((decision) => decision?.action === action)
+    .map((decision) => ({
+      marketKey: decision.marketKey,
+      title: decision.title,
+      eventTitle: decision.market?.eventTitle,
+      eventSlug: decision.market?.eventSlug,
+      categoryGroup: decision.market?.categoryGroup,
+      endDate: decision.market?.endDate,
+      score: finiteNumber(decision.score),
+      allocatedBudgetUsdc: finiteNumber(decision.allocatedBudgetUsdc),
+      targetPrice: finiteNumber(decision.targetPrice),
+      shares: finiteNumber(decision.shares),
+      nextCheckAt: decision.nextCheckAt,
+      reasonCodes: Array.isArray(decision.reasonCodes) ? decision.reasonCodes : [],
+      blockers: Array.isArray(decision.blockers) ? decision.blockers : []
+    }));
+}
+
+function iterationFinancialSummary(summary) {
+  if (!summary || typeof summary !== "object") {
+    return undefined;
+  }
+  return {
+    mode: summary.mode,
+    riskProfile: summary.riskProfile,
+    budgetUsdc: finiteNumber(summary.budgetUsdc),
+    spentUsdc: finiteNumber(summary.spentUsdc),
+    positionValueUsdc: finiteNumber(summary.positionValueUsdc),
+    unrealizedPnlUsdc: finiteNumber(summary.unrealizedPnlUsdc),
+    realizedPnlUsdc: finiteNumber(summary.realizedPnlUsdc),
+    totalPnlUsdc: finiteNumber(summary.totalPnlUsdc),
+    portfolioValueUsdc: finiteNumber(summary.portfolioValueUsdc),
+    openPositions: finiteNumber(summary.openPositions),
+    proposedBudgetUsdc: finiteNumber(summary.proposedBudgetUsdc),
+    remainingBudgetUsdc: finiteNumber(summary.remainingBudgetUsdc),
+    eligibleMarkets: finiteNumber(summary.eligibleMarkets),
+    proposedOrders: finiteNumber(summary.proposedOrders),
+    exitOrders: finiteNumber(summary.exitOrders),
+    researchRequired: finiteNumber(summary.researchRequired),
+    blocked: finiteNumber(summary.blocked),
+    riskBlockedNewBuys: summary.riskBlockedNewBuys,
+    nextRunAt: summary.nextRunAt
+  };
+}
+
 function absolutePath(value) {
   return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
 }
@@ -290,6 +341,9 @@ async function readJsonIfExists(filePath) {
 }
 
 function compactObservation(report) {
+  const iterationSummary = report.iteration?.summary;
+  const paperBuyProposals = report.iteration?.paperBuyProposals ?? [];
+  const paperExitProposals = report.iteration?.paperExitProposals ?? [];
   return {
     generatedAt: new Date().toISOString(),
     stateDbPath: report.environment.stateDbPath,
@@ -305,9 +359,43 @@ function compactObservation(report) {
     noSubmitInvariantHeld: report.summary?.noSubmitInvariantHeld,
     nextRunAt: report.summary?.nextRunAt,
     actionCounts: report.iteration?.actionCounts ?? {},
+    budgetUsdc: iterationSummary?.budgetUsdc,
+    spentUsdc: iterationSummary?.spentUsdc,
+    positionValueUsdc: iterationSummary?.positionValueUsdc,
+    unrealizedPnlUsdc: iterationSummary?.unrealizedPnlUsdc,
+    realizedPnlUsdc: iterationSummary?.realizedPnlUsdc,
+    totalPnlUsdc: iterationSummary?.totalPnlUsdc,
+    portfolioValueUsdc: iterationSummary?.portfolioValueUsdc,
+    openPositions: iterationSummary?.openPositions,
+    proposedBudgetUsdc: iterationSummary?.proposedBudgetUsdc,
+    remainingBudgetUsdc: iterationSummary?.remainingBudgetUsdc,
+    eligibleMarkets: iterationSummary?.eligibleMarkets,
+    proposedOrders: iterationSummary?.proposedOrders,
+    exitOrders: iterationSummary?.exitOrders,
+    researchRequired: iterationSummary?.researchRequired,
+    blocked: iterationSummary?.blocked,
+    riskBlockedNewBuys: iterationSummary?.riskBlockedNewBuys,
+    paperBuyProposalCount: paperBuyProposals.length,
+    paperExitProposalCount: paperExitProposals.length,
+    paperBuyProposals,
+    paperExitProposals,
     universeTotalMarkets: report.universe?.totalMarkets,
     universeRunId: report.universe?.runId
   };
+}
+
+function proposalSignature(proposals = []) {
+  return proposals
+    .map((proposal) => [
+      proposal.marketKey ?? "",
+      proposal.allocatedBudgetUsdc ?? "",
+      proposal.targetPrice ?? "",
+      proposal.shares ?? "",
+      (proposal.reasonCodes ?? []).join("|"),
+      (proposal.blockers ?? []).join("|")
+    ].join(":"))
+    .sort()
+    .join(";");
 }
 
 function observationChanges(previous, current) {
@@ -326,6 +414,28 @@ function observationChanges(previous, current) {
   }
   if (previous.dryRunCandidates !== current.dryRunCandidates) {
     changes.push("candidate_count_changed");
+  }
+  if (previous.openPositions !== current.openPositions) {
+    changes.push("open_positions_changed");
+  }
+  if (previous.remainingBudgetUsdc !== current.remainingBudgetUsdc) {
+    changes.push("remaining_budget_changed");
+  }
+  if (previous.realizedPnlUsdc !== current.realizedPnlUsdc) {
+    changes.push("realized_pnl_changed");
+  }
+  if (previous.totalPnlUsdc !== current.totalPnlUsdc) {
+    changes.push("total_pnl_changed");
+  }
+  if (previous.paperBuyProposalCount !== current.paperBuyProposalCount) {
+    changes.push("paper_buy_proposal_count_changed");
+  } else if (proposalSignature(previous.paperBuyProposals) !== proposalSignature(current.paperBuyProposals)) {
+    changes.push("paper_buy_proposals_changed");
+  }
+  if (previous.paperExitProposalCount !== current.paperExitProposalCount) {
+    changes.push("paper_exit_proposal_count_changed");
+  } else if (proposalSignature(previous.paperExitProposals) !== proposalSignature(current.paperExitProposals)) {
+    changes.push("paper_exit_proposals_changed");
   }
   if (previous.previewAttempts !== current.previewAttempts) {
     changes.push("preview_attempt_count_changed");
@@ -484,13 +594,18 @@ async function main() {
   };
 
   if (scheduler.skipped) {
+    const previousSummary = iterationFinancialSummary(previousObservation);
     report.iteration = {
       elapsedMs: 0,
       sessionId: previousObservation?.sessionId,
       startedThisRun: false,
       actionCounts: previousObservation?.actionCounts ?? {},
+      summary: previousSummary,
       proposedOrders: previousObservation?.proposedOrders,
-      nextRunAt: scheduler.previousNextRunAt
+      exitOrders: previousObservation?.exitOrders,
+      nextRunAt: scheduler.previousNextRunAt,
+      paperBuyProposals: previousObservation?.paperBuyProposals ?? [],
+      paperExitProposals: previousObservation?.paperExitProposals ?? []
     };
     report.dryRunExecutor = {
       elapsedMs: 0,
@@ -519,7 +634,16 @@ async function main() {
       previewIds: previousObservation?.previewIds ?? [],
       submittedOrders: 0,
       noSubmitInvariantHeld: true,
-      nextRunAt: scheduler.previousNextRunAt
+      nextRunAt: scheduler.previousNextRunAt,
+      spentUsdc: previousSummary?.spentUsdc,
+      remainingBudgetUsdc: previousSummary?.remainingBudgetUsdc,
+      openPositions: previousSummary?.openPositions,
+      unrealizedPnlUsdc: previousSummary?.unrealizedPnlUsdc,
+      realizedPnlUsdc: previousSummary?.realizedPnlUsdc,
+      totalPnlUsdc: previousSummary?.totalPnlUsdc,
+      portfolioValueUsdc: previousSummary?.portfolioValueUsdc,
+      paperBuyProposalCount: previousObservation?.paperBuyProposalCount ?? 0,
+      paperExitProposalCount: previousObservation?.paperExitProposalCount ?? 0
     };
     report.observation = await persistObservation(report, options);
     console.log(JSON.stringify(report, null, 2));
@@ -568,13 +692,18 @@ async function main() {
         compact: true
       });
     const decisions = Array.isArray(iteration.output?.candidates) ? iteration.output.candidates : [];
+    const summary = iterationFinancialSummary(iteration.output?.summary);
     report.iteration = {
       elapsedMs: iteration.elapsedMs,
       sessionId: session.sessionId,
       startedThisRun: session.started,
       actionCounts: countActions(decisions),
-      proposedOrders: iteration.output?.summary?.proposedOrders,
-      nextRunAt: iteration.output?.summary?.nextRunAt
+      summary,
+      proposedOrders: summary?.proposedOrders,
+      exitOrders: summary?.exitOrders,
+      nextRunAt: summary?.nextRunAt,
+      paperBuyProposals: paperDecisionDetails(decisions, "paper_buy_yes"),
+      paperExitProposals: paperDecisionDetails(decisions, "paper_sell_yes")
     };
 
     const dryRunExecutor = await callTool(client, "run_auto_trading_executor", {
@@ -611,7 +740,16 @@ async function main() {
       previewIds: report.previewExecutor?.previewIds ?? [],
       submittedOrders,
       noSubmitInvariantHeld: submittedOrders === 0,
-      nextRunAt: report.iteration.nextRunAt
+      nextRunAt: report.iteration.nextRunAt,
+      spentUsdc: summary?.spentUsdc,
+      remainingBudgetUsdc: summary?.remainingBudgetUsdc,
+      openPositions: summary?.openPositions,
+      unrealizedPnlUsdc: summary?.unrealizedPnlUsdc,
+      realizedPnlUsdc: summary?.realizedPnlUsdc,
+      totalPnlUsdc: summary?.totalPnlUsdc,
+      portfolioValueUsdc: summary?.portfolioValueUsdc,
+      paperBuyProposalCount: report.iteration.paperBuyProposals.length,
+      paperExitProposalCount: report.iteration.paperExitProposals.length
     };
     if (!report.summary.noSubmitInvariantHeld) {
       throw new Error("Heartbeat invariant failed: executor submitted an order while POLYMARKET_ENABLE_TRADING=false.");

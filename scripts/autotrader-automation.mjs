@@ -1,9 +1,9 @@
 import process from "node:process";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 
-import { dueStatus } from "./autotrader-scheduler.mjs";
+import { dueStatus, materialChangeFingerprint, materialPaperChanges } from "./autotrader-scheduler.mjs";
 
 function envString(name, fallback) {
   const value = process.env[name];
@@ -90,6 +90,25 @@ function parseJsonOrText(text) {
   }
 }
 
+async function acknowledgeMaterialChanges(latestReportPath) {
+  const latest = await readJsonIfExists(latestReportPath);
+  const changes = materialPaperChanges(latest);
+  if (!latest || changes.length === 0) {
+    return undefined;
+  }
+  const ack = {
+    ...latest,
+    materialChangesAcknowledgedAt: new Date().toISOString(),
+    materialChangesAckFingerprint: materialChangeFingerprint(changes)
+  };
+  await writeFile(latestReportPath, `${JSON.stringify(ack, null, 2)}\n`, "utf8");
+  return {
+    materialChangesAcknowledgedAt: ack.materialChangesAcknowledgedAt,
+    materialChangesAckFingerprint: ack.materialChangesAckFingerprint,
+    materialChanges: changes
+  };
+}
+
 async function main() {
   const options = parseArgs();
   const latestReportPath = absolutePath(options.latestReportPath);
@@ -105,6 +124,9 @@ async function main() {
   };
 
   if (!gate.shouldRunHeartbeat || gate.safetyIssue || options.dryRun) {
+    if (gate.automationDecision === "notify_material_change" && !options.dryRun) {
+      report.materialChangeAck = await acknowledgeMaterialChanges(latestReportPath);
+    }
     console.log(JSON.stringify(report, null, 2));
     return;
   }
@@ -123,9 +145,19 @@ async function main() {
   report.heartbeat = {
     exitCode: child.status,
     signal: child.signal,
+    error: child.error
+      ? {
+        name: child.error.name,
+        message: child.error.message,
+        code: child.error.code
+      }
+      : undefined,
     stdout: parseJsonOrText(child.stdout ?? ""),
     stderr: child.stderr?.trim() || undefined
   };
+  if (child.status === 0) {
+    report.materialChangeAck = await acknowledgeMaterialChanges(latestReportPath);
+  }
   report.ok = child.status === 0;
   console.log(JSON.stringify(report, null, 2));
   if (child.status !== 0) {
