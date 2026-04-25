@@ -23,6 +23,8 @@
     "state:summary": "tsx ./scripts/state-summary.ts",
     "state:queue": "tsx ./scripts/execution-queue.ts",
     "autotrader:heartbeat": "node ./scripts/autotrader-heartbeat.mjs",
+    "autotrader:automation": "node ./scripts/autotrader-automation.mjs",
+    "autotrader:automation:dry-run": "node ./scripts/autotrader-automation.mjs --dry-run",
     "autotrader:status": "node ./scripts/autotrader-status.mjs",
     "autotrader:status:json": "node ./scripts/autotrader-status.mjs --json",
     "autotrader:due-status": "node ./scripts/autotrader-status.mjs --due-status",

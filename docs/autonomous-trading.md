@@ -132,6 +132,8 @@ Use `npm run autotrader:status` when an automation only needs to report the late
 
 Use `npm run autotrader:due-status` for a lightweight automation gate. It reads only the latest heartbeat snapshot, returns `automationDecision` as `quiet`, `run_heartbeat`, `notify_material_change`, or `notify_safety_issue`, and never connects to the MCP server. Use `npm run autotrader:due-status:json` for machine-readable automation routing.
 
+Use `npm run autotrader:automation` as the preferred unattended entrypoint. It runs the same due-status gate first, exits quietly for `quiet` and `notify_material_change`, refuses to run the heartbeat on `notify_safety_issue`, and only spawns `autotrader-heartbeat.mjs` when the decision is `run_heartbeat`. The child heartbeat is launched with `POLYMARKET_ENABLE_TRADING=false` and defaults `AUTOTRADER_PREVIEW_LIMIT=0`, so this entrypoint remains paper/no-submit by default.
+
 ## MCP tools
 
 - `start_auto_trading_session`

@@ -97,3 +97,23 @@ test("autotrader due status escalates safety issues", () => {
   assert.equal(report.shouldNotify, true);
   assert.equal(report.safetyIssue, true);
 });
+
+test("autotrader due status surfaces material paper changes before nextRunAt", () => {
+  const now = new Date("2026-04-24T12:00:00.000Z");
+  const report = dueStatus(
+    {
+      sessionId: "session-1",
+      nextRunAt: "2026-04-24T12:10:00.000Z",
+      materialChanges: ["candidate_count_changed"],
+      noSubmitInvariantHeld: true,
+      submittedOrders: 0
+    },
+    { respectNextRunAt: true, schedulerSlackSeconds: 30 },
+    now
+  );
+
+  assert.equal(report.automationDecision, "notify_material_change");
+  assert.equal(report.shouldRunHeartbeat, false);
+  assert.equal(report.shouldNotify, true);
+  assert.deepEqual(report.materialPaperChanges, ["candidate_count_changed"]);
+});
