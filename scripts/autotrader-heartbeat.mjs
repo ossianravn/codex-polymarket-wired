@@ -278,6 +278,10 @@ function finiteNumber(value) {
   return Number.isFinite(value) ? value : undefined;
 }
 
+function roundedNumber(value, decimals = 6) {
+  return Number.isFinite(value) ? Number(value.toFixed(decimals)) : undefined;
+}
+
 function paperDecisionDetails(decisions = [], action) {
   return decisions
     .filter((decision) => decision?.action === action)
@@ -325,6 +329,120 @@ function iterationFinancialSummary(summary) {
   };
 }
 
+function hoursUntilIso(nowIso, endIso) {
+  if (typeof endIso !== "string" || !endIso.trim()) {
+    return undefined;
+  }
+  const nowMs = Date.parse(nowIso);
+  const endMs = Date.parse(endIso);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(endMs)) {
+    return undefined;
+  }
+  return Number(((endMs - nowMs) / (1000 * 60 * 60)).toFixed(3));
+}
+
+function positionAction(position, decisionsByMarketKey) {
+  const decision = decisionsByMarketKey.get(position.marketKey);
+  if (decision?.action === "paper_sell_yes") {
+    return "exit_proposed";
+  }
+  if (decision?.action === "paper_buy_yes") {
+    return "added_this_iteration";
+  }
+  return position.status === "open" ? "hold" : "closed";
+}
+
+function positionReasonCodes(position, decision) {
+  if (Array.isArray(decision?.reasonCodes) && decision.reasonCodes.length > 0) {
+    return decision.reasonCodes;
+  }
+  if (position.status === "closed") {
+    return ["position_closed"];
+  }
+  return ["paper_position_monitor"];
+}
+
+function buildPositionDiagnostics(ledger, decisions = [], generatedAt = new Date().toISOString()) {
+  const positions = Array.isArray(ledger?.positions) ? ledger.positions : [];
+  const decisionsByMarketKey = new Map(
+    decisions
+      .filter((decision) => typeof decision?.marketKey === "string")
+      .map((decision) => [decision.marketKey, decision])
+  );
+  return positions
+    .filter((position) => position?.status === "open")
+    .map((position) => {
+      const decision = decisionsByMarketKey.get(position.marketKey);
+      const action = positionAction(position, decisionsByMarketKey);
+      const endDate = typeof position.metadata?.endDate === "string" ? position.metadata.endDate : undefined;
+      const entryScore = finiteNumber(position.metadata?.score);
+      const currentPrice = finiteNumber(position.currentPrice);
+      const averagePrice = finiteNumber(position.averagePrice);
+      const priceMoveCents = currentPrice !== undefined && averagePrice !== undefined
+        ? Number(((currentPrice - averagePrice) * 100).toFixed(3))
+        : undefined;
+      return {
+        marketKey: position.marketKey,
+        title: position.title,
+        action,
+        status: position.status,
+        shares: roundedNumber(position.shares, 4),
+        averagePrice: roundedNumber(averagePrice),
+        currentPrice: roundedNumber(currentPrice),
+        priceMoveCents,
+        costUsdc: roundedNumber(position.costUsdc),
+        currentValueUsdc: roundedNumber(position.currentValueUsdc),
+        unrealizedPnlUsdc: roundedNumber(position.unrealizedPnlUsdc),
+        unrealizedPnlPct: roundedNumber(position.unrealizedPnlPct),
+        entryScore: roundedNumber(entryScore, 2),
+        currentDecisionScore: roundedNumber(decision?.score, 2),
+        endDate,
+        hoursToEnd: hoursUntilIso(generatedAt, endDate),
+        eventKey: typeof position.metadata?.eventKey === "string" ? position.metadata.eventKey : undefined,
+        tokenId: typeof position.metadata?.tokenId === "string" ? position.metadata.tokenId : undefined,
+        openedAt: position.openedAt,
+        updatedAt: position.updatedAt,
+        reasonCodes: positionReasonCodes(position, decision),
+        blockers: Array.isArray(decision?.blockers) ? decision.blockers : []
+      };
+    })
+    .sort((left, right) => {
+      const actionRank = actionRankForPositionDiagnostic(left.action) - actionRankForPositionDiagnostic(right.action);
+      if (actionRank !== 0) return actionRank;
+      return (left.unrealizedPnlUsdc ?? 0) - (right.unrealizedPnlUsdc ?? 0);
+    });
+}
+
+function normalizePositionDiagnostics(positionDiagnostics = []) {
+  return positionDiagnostics.map((position) => ({
+    ...position,
+    shares: roundedNumber(position.shares, 4),
+    averagePrice: roundedNumber(position.averagePrice),
+    currentPrice: roundedNumber(position.currentPrice),
+    priceMoveCents: roundedNumber(position.priceMoveCents, 3),
+    costUsdc: roundedNumber(position.costUsdc),
+    currentValueUsdc: roundedNumber(position.currentValueUsdc),
+    unrealizedPnlUsdc: roundedNumber(position.unrealizedPnlUsdc),
+    unrealizedPnlPct: roundedNumber(position.unrealizedPnlPct),
+    entryScore: roundedNumber(position.entryScore, 2),
+    currentDecisionScore: roundedNumber(position.currentDecisionScore, 2),
+    hoursToEnd: roundedNumber(position.hoursToEnd, 3)
+  }));
+}
+
+function actionRankForPositionDiagnostic(action) {
+  switch (action) {
+    case "exit_proposed":
+      return 0;
+    case "added_this_iteration":
+      return 1;
+    case "hold":
+      return 2;
+    default:
+      return 3;
+  }
+}
+
 function absolutePath(value) {
   return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
 }
@@ -344,6 +462,7 @@ function compactObservation(report) {
   const iterationSummary = report.iteration?.summary;
   const paperBuyProposals = report.iteration?.paperBuyProposals ?? [];
   const paperExitProposals = report.iteration?.paperExitProposals ?? [];
+  const positionDiagnostics = normalizePositionDiagnostics(report.portfolio?.positionDiagnostics ?? []);
   return {
     generatedAt: new Date().toISOString(),
     stateDbPath: report.environment.stateDbPath,
@@ -379,6 +498,8 @@ function compactObservation(report) {
     paperExitProposalCount: paperExitProposals.length,
     paperBuyProposals,
     paperExitProposals,
+    positionDiagnostics,
+    positionDiagnosticCount: positionDiagnostics.length,
     universeTotalMarkets: report.universe?.totalMarkets,
     universeRunId: report.universe?.runId
   };
@@ -586,6 +707,7 @@ async function main() {
     sessionLookup: null,
     sessionStarted: null,
     iteration: null,
+    portfolio: null,
     dryRunExecutor: null,
     previewExecutor: null,
     observation: null,
@@ -606,6 +728,11 @@ async function main() {
       nextRunAt: scheduler.previousNextRunAt,
       paperBuyProposals: previousObservation?.paperBuyProposals ?? [],
       paperExitProposals: previousObservation?.paperExitProposals ?? []
+    };
+    report.portfolio = {
+      elapsedMs: 0,
+      source: "previous_observation",
+      positionDiagnostics: previousObservation?.positionDiagnostics ?? []
     };
     report.dryRunExecutor = {
       elapsedMs: 0,
@@ -704,6 +831,23 @@ async function main() {
       nextRunAt: summary?.nextRunAt,
       paperBuyProposals: paperDecisionDetails(decisions, "paper_buy_yes"),
       paperExitProposals: paperDecisionDetails(decisions, "paper_sell_yes")
+    };
+
+    const portfolio = await callTool(client, "get_auto_trading_session", {
+      session_id: session.sessionId,
+      decision_limit: 100,
+      compact: false
+    });
+    report.portfolio = {
+      elapsedMs: portfolio.elapsedMs,
+      source: "get_auto_trading_session",
+      decisionCount: portfolio.output?.decisionCount,
+      ledgerSummary: portfolio.output?.ledger?.summary,
+      positionDiagnostics: buildPositionDiagnostics(
+        portfolio.output?.ledger,
+        decisions,
+        iteration.output?.generatedAt
+      )
     };
 
     const dryRunExecutor = await callTool(client, "run_auto_trading_executor", {

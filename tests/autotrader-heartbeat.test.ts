@@ -158,7 +158,9 @@ test("autotrader due status includes latest paper financial summary", () => {
       paperBuyProposalCount: 1,
       paperExitProposalCount: 2,
       paperBuyProposals: [{ marketKey: "buy-1" }],
-      paperExitProposals: [{ marketKey: "exit-1" }, { marketKey: "exit-2" }]
+      paperExitProposals: [{ marketKey: "exit-1" }, { marketKey: "exit-2" }],
+      positionDiagnosticCount: 1,
+      positionDiagnostics: [{ marketKey: "position-1", action: "hold" }]
     },
     { respectNextRunAt: true, schedulerSlackSeconds: 30 },
     now
@@ -176,4 +178,6 @@ test("autotrader due status includes latest paper financial summary", () => {
   assert.equal(report.paperExitProposalCount, 2);
   assert.deepEqual(report.paperBuyProposals, [{ marketKey: "buy-1" }]);
   assert.deepEqual(report.paperExitProposals, [{ marketKey: "exit-1" }, { marketKey: "exit-2" }]);
+  assert.equal(report.positionDiagnosticCount, 1);
+  assert.deepEqual(report.positionDiagnostics, [{ marketKey: "position-1", action: "hold" }]);
 });

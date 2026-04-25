@@ -95,6 +95,8 @@ export function dueStatus(previousObservation, options, now = new Date()) {
     paperBuyProposalCount: previousObservation?.paperBuyProposalCount ?? 0,
     paperExitProposalCount: previousObservation?.paperExitProposalCount ?? 0,
     paperBuyProposals: previousObservation?.paperBuyProposals ?? [],
-    paperExitProposals: previousObservation?.paperExitProposals ?? []
+    paperExitProposals: previousObservation?.paperExitProposals ?? [],
+    positionDiagnosticCount: previousObservation?.positionDiagnosticCount ?? 0,
+    positionDiagnostics: previousObservation?.positionDiagnostics ?? []
   };
 }

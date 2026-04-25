@@ -134,6 +134,7 @@ function renderText(status) {
     budgetLine,
     pnlLine,
     `Paper proposals: ${latest.paperBuyProposalCount ?? 0} buy, ${latest.paperExitProposalCount ?? 0} exit`,
+    `Position diagnostics: ${latest.positionDiagnosticCount ?? 0}`,
     `Preview IDs: ${(latest.previewIds ?? []).join(", ") || "none"}`,
     `Actions: ${actionCounts}`,
     `Next run: ${latest.nextRunAt ?? "unknown"}`,
@@ -159,7 +160,8 @@ function renderDueStatusText(report) {
     `Safety issue: ${report.safetyIssue ? "yes" : "no"}`,
     `Budget: $${(report.spentUsdc ?? 0).toFixed(4)} spent, $${(report.remainingBudgetUsdc ?? 0).toFixed(4)} remaining`,
     `Open positions: ${report.openPositions ?? "unknown"}; PnL: $${(report.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized, $${(report.realizedPnlUsdc ?? 0).toFixed(6)} realized`,
-    `Paper proposals: ${report.paperBuyProposalCount ?? 0} buy, ${report.paperExitProposalCount ?? 0} exit`
+    `Paper proposals: ${report.paperBuyProposalCount ?? 0} buy, ${report.paperExitProposalCount ?? 0} exit`,
+    `Position diagnostics: ${report.positionDiagnosticCount ?? 0}`
   ].join("\n");
 }
 
