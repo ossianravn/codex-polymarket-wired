@@ -1,0 +1,42 @@
+{
+  "evidenceBundles": [
+    {
+      "marketKey": "condition:example-market",
+      "title": "Example independent research bundle",
+      "question": "Will the example market resolve Yes?",
+      "thesis": "Independent non-venue evidence supports a fair probability above the current execution threshold.",
+      "fairValueLow": 0.42,
+      "fairValueBase": 0.55,
+      "fairValueHigh": 0.64,
+      "supportsYes": [
+        {
+          "source": "official-source",
+          "title": "Official source supports the Yes case",
+          "url": "https://example.com/official-source",
+          "summary": "A primary source confirms a condition that materially increases the Yes probability.",
+          "stance": "supports_yes",
+          "confidence": "0.70"
+        }
+      ],
+      "supportsNo": [
+        {
+          "source": "counter-source",
+          "title": "Counter-case remains unresolved",
+          "url": "https://example.com/counter-source",
+          "summary": "A remaining dependency could prevent the condition from resolving Yes.",
+          "stance": "supports_no",
+          "confidence": "0.55"
+        }
+      ],
+      "openQuestions": [
+        "Whether the remaining dependency resolves before the market end time."
+      ],
+      "providers": [
+        "official-source",
+        "counter-source"
+      ],
+      "completedAt": "2026-04-25T12:00:00.000Z",
+      "automationName": "manual-independent-research"
+    }
+  ]
+}

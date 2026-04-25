@@ -4,7 +4,7 @@ The autonomous trading implementation is a mode-aware control plane. It turns a 
 
 It does not submit live orders. Live execution remains gated behind `preview_limit_order`, `preview_marketable_order`, and `submit_previewed_order`.
 
-For the staged path from this paper/preview control plane to production-grade autonomous trading, see `docs/autonomous-trading-production-readiness-plan.md`.
+For the staged path from this paper/preview control plane to production-grade autonomous trading, see `docs/autonomous-trading-production-readiness-plan.md`. For the narrower paper-only wrap-up target, see `docs/autotrader-paper-mvp-wrap-up.md`.
 
 ## mandate
 
@@ -131,6 +131,14 @@ node --import tsx ./scripts/forecast-writer.ts --limit 100 --min-liquidity-usdc 
 The writer uses non-price universe evidence only: structural type, catalyst/modelability scores, ambiguity/risk scores, resolution metadata, and reason codes. It deliberately records `method: "screening_forecast_v0"` and a counter-case so deeper research can replace it later. Screening forecasts can unlock paper entries only; live-mode entries remain blocked until a deeper non-screening forecast method replaces the artifact. It skips existing forecasts unless `--overwrite` is provided.
 
 `start_auto_trading_session` and `run_auto_trading_iteration` call this writer by default through `auto_forecast=true`, so paper sessions can produce candidates after a universe scan while still respecting the forecast-before-price guard. Pass `auto_forecast=false` when testing the hard research gate itself.
+
+When candidates are blocked by the independent forecast gate, the autotrader emits `researchRequest` payloads. Use `autotrader:research-worker` to consume those requests from persisted decisions and record `research_runs` from an independent evidence bundle:
+
+```bash
+node --import tsx ./scripts/autotrader-research-worker.ts --session-id <session-id> --evidence-file ./examples/autotrader-research-evidence.example.json --json
+```
+
+The worker rejects evidence bundles that mention venue prices, Polymarket odds, orderbook data, bid/ask, spread, midpoint, recent venue trades, or market-implied probability. After the worker records a valid research run, run `forecast:write` again so the forecast writer can upgrade the market to `method: "deep_research_forecast_v1"`.
 
 ## live execution modes
 
