@@ -633,3 +633,150 @@ test("daemon agent loop applies an agent plan instead of deterministic paper exe
     }
   });
 });
+
+test("daemon agent loop can invoke an agent command that returns a plan on stdout", async () => {
+  await withTempDir(async (dir) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const dbPath = path.join(dir, "state.sqlite");
+    const commandPath = path.join(dir, "agent-command.mjs");
+    const store = openStateStore(dbPath);
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:daemon-agent-command",
+      conditionId: "daemon-agent-command",
+      title: "Daemon agent command market",
+      outcomes: ["Yes", "No"],
+      clobTokenIds: ["agent-command-yes", "agent-command-no"],
+      yesTokenId: "agent-command-yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      endDate: new Date(now.getTime() + 12 * 60 * 60_000).toISOString(),
+      liquidityUsd: 25_000,
+      volume24hUsd: 5_000,
+      impliedProb: 0.4,
+      bestBid: 0.39,
+      bestAsk: 0.4,
+      midpoint: 0.395,
+      spreadCents: 1,
+      categoryGroup: "sports",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      opportunityMode: "resolution-watch",
+      tradabilityScore: 90,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: 95,
+      resolutionAmbiguityScore: 10,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {
+        independentForecast: {
+          sealed: true,
+          probability: 0.62,
+          uncertainty: 0.02,
+          forecastedAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + 12 * 60 * 60_000).toISOString(),
+          numericalChecks: ["daemon_agent_command_fixture"],
+          usesVenuePrice: false
+        }
+      },
+      capturedAt: now.toISOString()
+    }]);
+    store.createAutoTradingSession({
+      sessionId: "daemon-agent-command-session",
+      name: "daemon agent command test",
+      status: "active",
+      mode: "paper",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      startedAt: now.toISOString(),
+      endsAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
+      heartbeatMinutes: 15,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5
+      }
+    });
+    store.close();
+
+    await writeFile(commandPath, `
+const plan = {
+  kind: "polymarket_autotrader_agent_decision_plan_v1",
+  sessionId: process.env.AUTOTRADER_AGENT_SESSION_ID,
+  agentName: "stdout-command-agent",
+  decisions: [{
+    decisionRef: "candidate-01",
+    action: "paper_buy_yes",
+    confidence: 0.77,
+    rationale: "Command agent selected the top candidate because the independent edge is sufficient.",
+    limitPrice: 0.4,
+    maxSpendUsdc: 5
+  }]
+};
+console.log(JSON.stringify(plan));
+`, "utf8");
+
+    const previousTradingFlag = process.env.POLYMARKET_ENABLE_TRADING;
+    process.env.POLYMARKET_ENABLE_TRADING = "false";
+    try {
+      const options: AutotraderDaemonOptions = {
+        sessionId: "daemon-agent-command-session",
+        mode: "paper",
+        loop: false,
+        intervalSeconds: 30,
+        respectNextRunAt: false,
+        schedulerSlackSeconds: 30,
+        limit: 5,
+        autoForecast: false,
+        agentLoop: true,
+        agentCandidateLimit: 5,
+        agentCommand: `"${process.execPath}" "${commandPath}"`,
+        agentCommandTimeoutMs: 10_000,
+        autoRefreshUniverse: false,
+        autoRefreshSnapshots: false,
+        stateDbPath: dbPath,
+        latestReportPath: path.join(dir, "latest.json"),
+        observationLogPath: path.join(dir, "daemon.jsonl"),
+        lockDir: path.join(dir, "daemon.lock"),
+        staleLockSeconds: 60,
+        json: true
+      };
+      const report = await runDaemonOnce(options, now);
+      const observation = (report.observations as Array<Record<string, unknown>>)[0];
+      const agentLoop = observation?.agentLoop as {
+        command?: { configured?: boolean; exitCode?: number; planFromStdout?: boolean; stdoutBytes?: number };
+        planProvided?: boolean;
+        applied?: { recorded?: number; blocked?: number };
+      } | undefined;
+
+      assert.equal(report.ok, true);
+      assert.equal(agentLoop?.command?.configured, true);
+      assert.equal(agentLoop?.command?.exitCode, 0);
+      assert.equal(agentLoop?.command?.planFromStdout, true);
+      assert.ok((agentLoop?.command?.stdoutBytes ?? 0) > 0);
+      assert.equal(agentLoop?.planProvided, true);
+      assert.equal(agentLoop?.applied?.recorded, 1);
+      assert.equal(agentLoop?.applied?.blocked, 0);
+      assert.equal(observation?.spentUsdc, 5);
+      assert.equal(observation?.remainingBudgetUsdc, 25);
+    } finally {
+      if (previousTradingFlag === undefined) {
+        delete process.env.POLYMARKET_ENABLE_TRADING;
+      } else {
+        process.env.POLYMARKET_ENABLE_TRADING = previousTradingFlag;
+      }
+    }
+  });
+});

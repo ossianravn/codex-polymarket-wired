@@ -1,4 +1,5 @@
 import process from "node:process";
+import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +51,8 @@ export interface AutotraderDaemonOptions {
   agentPlanFile?: string;
   agentBriefPath?: string;
   agentPromptPath?: string;
+  agentCommand?: string;
+  agentCommandTimeoutMs?: number;
   autoRefreshUniverse?: boolean;
   autoRefreshSnapshots?: boolean;
   refreshSnapshotLimit?: number;
@@ -155,6 +158,8 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     agentPlanFile: envString("AUTOTRADER_AGENT_PLAN_FILE"),
     agentBriefPath: envString("AUTOTRADER_AGENT_BRIEF_OUT"),
     agentPromptPath: envString("AUTOTRADER_AGENT_PROMPT_OUT"),
+    agentCommand: envString("AUTOTRADER_AGENT_COMMAND"),
+    agentCommandTimeoutMs: envNumber("AUTOTRADER_AGENT_COMMAND_TIMEOUT_MS", 120_000),
     autoRefreshUniverse: envBoolean("AUTOTRADER_AUTO_REFRESH_UNIVERSE", true),
     autoRefreshSnapshots: envBoolean("AUTOTRADER_REFRESH_SNAPSHOTS", true),
     refreshSnapshotLimit: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_LIMIT", 50),
@@ -217,6 +222,12 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     } else if (arg === "--agent-prompt-out" || arg.startsWith("--agent-prompt-out=")) {
       options.agentPromptPath = readArgValue(argv, index);
       if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--agent-command" || arg.startsWith("--agent-command=")) {
+      options.agentCommand = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--agent-command-timeout-ms" || arg.startsWith("--agent-command-timeout-ms=")) {
+      options.agentCommandTimeoutMs = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--no-auto-refresh-universe") {
       options.autoRefreshUniverse = false;
     } else if (arg === "--auto-refresh-universe") {
@@ -273,6 +284,7 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
   options.schedulerSlackSeconds = Math.max(0, Math.min(60 * 60, options.schedulerSlackSeconds));
   options.limit = Math.max(1, Math.min(100, options.limit));
   options.agentCandidateLimit = Math.max(1, Math.min(50, Number(options.agentCandidateLimit ?? 12)));
+  options.agentCommandTimeoutMs = Math.max(1_000, Math.min(10 * 60_000, Number(options.agentCommandTimeoutMs ?? 120_000)));
   options.refreshSnapshotLimit = Math.max(1, Math.min(250, Number(options.refreshSnapshotLimit ?? 50)));
   options.refreshSnapshotMaxAgeMinutes = Math.max(0, Math.min(24 * 60, Number(options.refreshSnapshotMaxAgeMinutes ?? 5)));
   options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes ?? 10)));
@@ -307,6 +319,89 @@ async function loadAgentDecisionPlan(filePath: string | undefined): Promise<Auto
     return undefined;
   }
   return JSON.parse(await readFile(absolutePath(filePath), "utf8")) as AutoTradingAgentDecisionPlan;
+}
+
+function parseAgentDecisionPlanText(text: string): AutoTradingAgentDecisionPlan | undefined {
+  if (!text.trim()) {
+    return undefined;
+  }
+  return JSON.parse(text) as AutoTradingAgentDecisionPlan;
+}
+
+interface AgentCommandRunResult {
+  command: string;
+  exitCode: number | null;
+  signal?: NodeJS.Signals | null;
+  stdoutBytes: number;
+  stderr?: string;
+  error?: {
+    name: string;
+    message: string;
+    code?: string;
+  };
+  planFromStdout: boolean;
+}
+
+async function runAgentCommand(
+  options: AutotraderDaemonOptions,
+  context: {
+    sessionId: string;
+    briefPath?: string;
+    promptPath?: string;
+    planPath?: string;
+  }
+): Promise<{ plan?: AutoTradingAgentDecisionPlan; run?: AgentCommandRunResult }> {
+  if (!options.agentCommand) {
+    return {};
+  }
+
+  const child = spawnSync(options.agentCommand, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    shell: true,
+    timeout: options.agentCommandTimeoutMs,
+    env: {
+      ...process.env,
+      POLYMARKET_ENABLE_TRADING: "false",
+      AUTOTRADER_AGENT_SESSION_ID: context.sessionId,
+      AUTOTRADER_AGENT_BRIEF_PATH: context.briefPath ? absolutePath(context.briefPath) : "",
+      AUTOTRADER_AGENT_PROMPT_PATH: context.promptPath ? absolutePath(context.promptPath) : "",
+      AUTOTRADER_AGENT_PLAN_OUT: context.planPath ? absolutePath(context.planPath) : ""
+    }
+  });
+  const run = {
+    command: options.agentCommand,
+    exitCode: child.status,
+    signal: child.signal,
+    stdoutBytes: Buffer.byteLength(child.stdout ?? "", "utf8"),
+    stderr: child.stderr?.trim() || undefined,
+    error: child.error
+      ? {
+        name: child.error.name,
+        message: child.error.message,
+        code: (child.error as NodeJS.ErrnoException).code
+      }
+      : undefined,
+    planFromStdout: false
+  } satisfies AgentCommandRunResult;
+
+  if (child.status !== 0 || child.error) {
+    throw new Error(`Agent command failed: ${child.error?.message ?? child.stderr?.trim() ?? `exit ${child.status}`}`);
+  }
+
+  if (context.planPath) {
+    const plan = await loadAgentDecisionPlan(context.planPath);
+    return { plan, run };
+  }
+
+  const plan = parseAgentDecisionPlanText(child.stdout ?? "");
+  return {
+    plan,
+    run: {
+      ...run,
+      planFromStdout: Boolean(plan)
+    }
+  };
 }
 
 async function refreshSnapshotsForSession(
@@ -828,7 +923,17 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         await mkdir(path.dirname(absolutePath(options.agentPromptPath)), { recursive: true });
         await writeFile(absolutePath(options.agentPromptPath), `${agentBrief.prompt}\n`, "utf8");
       }
-      const agentPlan = options.agentLoop ? await loadAgentDecisionPlan(options.agentPlanFile) : undefined;
+      const agentCommand = options.agentLoop && agentBrief
+        ? await runAgentCommand(options, {
+          sessionId: session.sessionId,
+          briefPath: options.agentBriefPath,
+          promptPath: options.agentPromptPath,
+          planPath: options.agentPlanFile
+        })
+        : {};
+      const agentPlan = options.agentLoop
+        ? agentCommand.plan ?? await loadAgentDecisionPlan(options.agentPlanFile)
+        : undefined;
       const agentApplyResult = agentBrief && agentPlan
         ? applyAutoTradingAgentDecisionPlan(store, agentBrief, agentPlan, { now: decisionNow })
         : undefined;
@@ -857,6 +962,17 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
             briefPath: options.agentBriefPath,
             promptPath: options.agentPromptPath,
             planFile: options.agentPlanFile,
+            command: options.agentCommand
+              ? {
+                configured: true,
+                exitCode: agentCommand.run?.exitCode,
+                signal: agentCommand.run?.signal,
+                stdoutBytes: agentCommand.run?.stdoutBytes,
+                stderr: agentCommand.run?.stderr,
+                error: agentCommand.run?.error,
+                planFromStdout: agentCommand.run?.planFromStdout ?? false
+              }
+              : { configured: false },
             candidateCount: agentBrief?.candidates.length ?? 0,
             planProvided: Boolean(agentPlan),
             applied: agentApplyResult

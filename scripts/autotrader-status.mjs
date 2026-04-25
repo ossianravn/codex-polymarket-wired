@@ -133,7 +133,7 @@ function renderText(status) {
     : "Paper execution: unknown";
   const agentLoop = latest.agentLoop;
   const agentLine = agentLoop?.enabled
-    ? `Agent loop: on; candidates ${agentLoop.candidateCount ?? 0}; plan ${agentLoop.planProvided ? "provided" : "missing"}; recorded ${agentLoop.applied?.recorded ?? 0}; blocked ${agentLoop.applied?.blocked ?? 0}`
+    ? `Agent loop: on; candidates ${agentLoop.candidateCount ?? 0}; command ${agentLoop.command?.configured ? `exit ${agentLoop.command.exitCode ?? "unknown"}` : "off"}; plan ${agentLoop.planProvided ? "provided" : "missing"}; recorded ${agentLoop.applied?.recorded ?? 0}; blocked ${agentLoop.applied?.blocked ?? 0}`
     : "Agent loop: off";
   return [
     `Autotrader status: ${(status.latest.noSubmitInvariantHeld ?? latest.noSubmitInvariantHeld) ? "safe-no-submit" : "SAFETY VIOLATION"}`,
