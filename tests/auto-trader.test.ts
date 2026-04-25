@@ -878,6 +878,7 @@ test("auto-trader rotates paper budget by exiting weak positions for stronger ca
     assert.equal(second.candidates.find((candidate) => candidate.marketKey === "condition:strong-fresh")?.blockers.includes("budget_exhausted"), true);
     assert.equal(second.summary.openPositions, 0);
     assert.equal(second.summary.remainingBudgetUsdc, 4.5);
+    assert.equal(second.summary.nextRunAt, isoAfter(later, 5 / 60));
 
     const redeployAt = new Date(later.getTime() + 60 * 1000);
     const third = runAutoTradingIteration(store, {

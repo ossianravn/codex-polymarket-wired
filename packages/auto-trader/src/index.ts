@@ -391,6 +391,10 @@ function roundShares(value: number): number {
   return Number(value.toFixed(6));
 }
 
+function redeployAfterExitMinutes(mandate: AutoTradingMandate): number {
+  return Math.min(5, mandate.heartbeatMinutes);
+}
+
 function clampProbability(value: number): number {
   if (!Number.isFinite(value)) {
     return 0.5;
@@ -1574,6 +1578,9 @@ export function runAutoTradingIteration(
     }))
     : [];
 
+  const remainingBudgetBeforePaperFills = ledger.summary.remainingBudgetUsdc;
+  const hadPaperExitDecision = cappedDecisions.some((decision) => decision.action === "paper_sell_yes");
+
   if (persist && mandate.mode === "paper") {
     cappedDecisions.forEach((decision, index) => {
       const storedDecision = stored[index];
@@ -1634,11 +1641,20 @@ export function runAutoTradingIteration(
   const proposedBudgetUsdc = cappedDecisions
     .filter((decision) => isEntryAction(decision.action))
     .reduce((sum, decision) => sum + (decision.allocatedBudgetUsdc ?? 0), 0);
-  const nextRunAt = cappedDecisions
+  const paperExitFreedUsableCapital =
+    mandate.mode === "paper" &&
+    persist &&
+    hadPaperExitDecision &&
+    ledger.summary.remainingBudgetUsdc >= mandate.minOrderUsdc &&
+    ledger.summary.remainingBudgetUsdc > remainingBudgetBeforePaperFills;
+  const decisionNextRunAt = cappedDecisions
     .map((decision) => decision.nextCheckAt)
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(0) ?? addMinutes(now, mandate.heartbeatMinutes);
+  const nextRunAt = paperExitFreedUsableCapital
+    ? [addMinutes(now, redeployAfterExitMinutes(mandate)), decisionNextRunAt].sort()[0]
+    : decisionNextRunAt;
 
   return {
     session,
