@@ -741,6 +741,17 @@ function budgetRotationEdgeThreshold(riskProfile: AutoTradingRiskProfile): numbe
   }
 }
 
+function eventRotationEdgeThreshold(riskProfile: AutoTradingRiskProfile): number {
+  switch (riskProfile) {
+    case "aggressive":
+      return 5;
+    case "balanced":
+      return 8;
+    case "conservative":
+      return 12;
+  }
+}
+
 function paperPositionEntryScore(position: StoredPaperTradingLedger["positions"][number]): number {
   return asNumber(position.metadata.score) ?? 0;
 }
@@ -748,6 +759,58 @@ function paperPositionEntryScore(position: StoredPaperTradingLedger["positions"]
 function paperPositionRotationRank(position: StoredPaperTradingLedger["positions"][number]): number {
   const pnlPct = position.unrealizedPnlPct ?? 0;
   return paperPositionEntryScore(position) + pnlPct * 0.25;
+}
+
+function buildPaperRotationExitDecision(
+  position: StoredPaperTradingLedger["positions"][number],
+  mandate: AutoTradingMandate,
+  now: Date,
+  rotationReasonCode: string,
+  rotationCandidate: AutoTradingDecision,
+  entryScore: number,
+  scoreEdge: number
+): AutoTradingDecision {
+  const market = {
+    marketKey: position.marketKey,
+    title: position.title,
+    eventKey: position.metadata.eventKey,
+    endDate: position.metadata.endDate,
+    currentPrice: position.currentPrice,
+    averagePrice: position.averagePrice,
+    shares: position.shares,
+    unrealizedPnlPct: position.unrealizedPnlPct,
+    unrealizedPnlUsdc: position.unrealizedPnlUsdc,
+    rotationCandidate: {
+      marketKey: rotationCandidate.marketKey,
+      title: rotationCandidate.title,
+      score: rotationCandidate.score,
+      targetPrice: rotationCandidate.targetPrice,
+      eventSlug: rotationCandidate.market.eventSlug
+    }
+  };
+  const decision = {
+    marketKey: position.marketKey,
+    title: position.title,
+    action: exitActionForMode(mandate.mode),
+    status: "proposed" as const,
+    score: clampScore(80 + scoreEdge),
+    allocatedBudgetUsdc: roundMoney(position.currentValueUsdc as number),
+    targetPrice: position.currentPrice,
+    shares: position.shares,
+    tokenId: typeof position.metadata.tokenId === "string" ? position.metadata.tokenId : undefined,
+    reasonCodes: [
+      rotationReasonCode,
+      `candidate_score:${rotationCandidate.score}`,
+      `position_score:${Number(entryScore.toFixed(2))}`
+    ],
+    blockers: [],
+    market
+  } satisfies AutoTradingDecision;
+
+  return {
+    ...decision,
+    nextCheckAt: nextCheckForDecision(decision, mandate, now)
+  };
 }
 
 function buildBudgetRotationExitDecisions(
@@ -797,48 +860,73 @@ function buildBudgetRotationExitDecisions(
     return [];
   }
 
-  const position = weakestPosition.position;
-  const market = {
-    marketKey: position.marketKey,
-    title: position.title,
-    eventKey: position.metadata.eventKey,
-    endDate: position.metadata.endDate,
-    currentPrice: position.currentPrice,
-    averagePrice: position.averagePrice,
-    shares: position.shares,
-    unrealizedPnlPct: position.unrealizedPnlPct,
-    unrealizedPnlUsdc: position.unrealizedPnlUsdc,
-    rotationCandidate: {
-      marketKey: strongestBudgetBlockedCandidate.marketKey,
-      title: strongestBudgetBlockedCandidate.title,
-      score: strongestBudgetBlockedCandidate.score,
-      targetPrice: strongestBudgetBlockedCandidate.targetPrice,
-      eventSlug: strongestBudgetBlockedCandidate.market.eventSlug
-    }
-  };
-  const decision = {
-    marketKey: position.marketKey,
-    title: position.title,
-    action: exitActionForMode(mandate.mode),
-    status: "proposed" as const,
-    score: clampScore(80 + weakestPosition.scoreEdge),
-    allocatedBudgetUsdc: roundMoney(position.currentValueUsdc as number),
-    targetPrice: position.currentPrice,
-    shares: position.shares,
-    tokenId: typeof position.metadata.tokenId === "string" ? position.metadata.tokenId : undefined,
-    reasonCodes: [
-      "budget_rotation",
-      `candidate_score:${strongestBudgetBlockedCandidate.score}`,
-      `position_score:${Number(weakestPosition.entryScore.toFixed(2))}`
-    ],
-    blockers: [],
-    market
-  } satisfies AutoTradingDecision;
+  return [buildPaperRotationExitDecision(
+    weakestPosition.position,
+    mandate,
+    now,
+    "budget_rotation",
+    strongestBudgetBlockedCandidate,
+    weakestPosition.entryScore,
+    weakestPosition.scoreEdge
+  )];
+}
 
-  return [{
-    ...decision,
-    nextCheckAt: nextCheckForDecision(decision, mandate, now)
-  }];
+function buildEventRotationExitDecisions(
+  ledger: StoredPaperTradingLedger,
+  mandate: AutoTradingMandate,
+  session: StoredAutoTradingSessionRecord,
+  now: Date,
+  candidates: AutoTradingDecision[],
+  existingExitMarketKeys: Set<string>
+): AutoTradingDecision[] {
+  if (mandate.mode !== "paper") {
+    return [];
+  }
+
+  const threshold = eventRotationEdgeThreshold(mandate.riskProfile);
+  for (const candidate of candidates
+    .filter((entry) =>
+      entry.status === "watch" &&
+      (entry.blockers.includes("event_position_cap_reached") || entry.blockers.includes("event_exposure_cap_reached")) &&
+      entry.score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold
+    )
+    .sort((left, right) => right.score - left.score)) {
+    const candidateEventKey = eventIdentity(candidate.market);
+    const weakestSameEventPosition = ledger.positions
+      .filter((position) =>
+        position.status === "open" &&
+        position.marketKey !== candidate.marketKey &&
+        positionEventIdentity(position) === candidateEventKey &&
+        !existingExitMarketKeys.has(position.marketKey) &&
+        position.currentPrice !== undefined &&
+        position.currentValueUsdc !== undefined &&
+        position.shares > 0
+      )
+      .map((position) => {
+        const entryScore = paperPositionEntryScore(position);
+        const scoreEdge = candidate.score - entryScore;
+        return { position, entryScore, scoreEdge };
+      })
+      .filter((entry) => entry.scoreEdge >= threshold)
+      .sort((left, right) => {
+        const rankDelta = paperPositionRotationRank(left.position) - paperPositionRotationRank(right.position);
+        return rankDelta !== 0 ? rankDelta : right.scoreEdge - left.scoreEdge;
+      })[0];
+
+    if (weakestSameEventPosition) {
+      return [buildPaperRotationExitDecision(
+        weakestSameEventPosition.position,
+        mandate,
+        now,
+        "event_rotation",
+        candidate,
+        weakestSameEventPosition.entryScore,
+        weakestSameEventPosition.scoreEdge
+      )];
+    }
+  }
+
+  return [];
 }
 
 function marketIdentity(market: Record<string, unknown>): string {
@@ -1280,17 +1368,33 @@ export function runAutoTradingIteration(
     })
     .slice(0, limit);
 
-  const rotationExitDecisions = mandate.mode === "paper"
+  const rotationExitMarketKeys = new Set(exitDecisions.map((decision) => decision.marketKey).filter((value): value is string => Boolean(value)));
+  const eventRotationExitDecisions = mandate.mode === "paper"
+    ? buildEventRotationExitDecisions(
+      ledger,
+      mandate,
+      session,
+      now,
+      decisions,
+      rotationExitMarketKeys
+    )
+    : [];
+  for (const decision of eventRotationExitDecisions) {
+    if (decision.marketKey) {
+      rotationExitMarketKeys.add(decision.marketKey);
+    }
+  }
+  const budgetRotationExitDecisions = mandate.mode === "paper"
     ? buildBudgetRotationExitDecisions(
       ledger,
       mandate,
       session,
       now,
       decisions,
-      new Set(exitDecisions.map((decision) => decision.marketKey).filter((value): value is string => Boolean(value)))
+      rotationExitMarketKeys
     )
     : [];
-  exitDecisions = [...exitDecisions, ...rotationExitDecisions];
+  exitDecisions = [...exitDecisions, ...eventRotationExitDecisions, ...budgetRotationExitDecisions];
   const openPositionsAfterExits = Math.max(0, ledger.summary.openPositionCount - exitDecisions.length);
   const allowedNewBuys = Math.max(0, mandate.maxOpenPositions - openPositionsAfterExits);
   let proposedBuyCount = 0;

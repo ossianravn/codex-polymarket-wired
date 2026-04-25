@@ -704,6 +704,147 @@ test("auto-trader rotates paper budget by exiting weak positions for stronger ca
   });
 });
 
+test("auto-trader rotates same-event paper exposure when a stronger candidate is event-capped", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const market = (runId: string, input: {
+      key: string;
+      eventSlug: string;
+      price: number;
+      tradeScore: number;
+      researchScore: number;
+    }) => ({
+      runId,
+      marketKey: input.key,
+      conditionId: input.key.replace("condition:", ""),
+      slug: input.key.replace("condition:", ""),
+      eventSlug: input.eventSlug,
+      eventTitle: input.eventSlug,
+      title: input.key,
+      category: "politics",
+      tags: ["politics"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [input.price, Number((1 - input.price).toFixed(4))],
+      clobTokenIds: [`${input.key}:yes`, `${input.key}:no`],
+      yesTokenId: `${input.key}:yes`,
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 30_000,
+      impliedProb: input.price,
+      bestBid: input.price,
+      bestAsk: Number(Math.min(0.99, input.price + 0.02).toFixed(4)),
+      midpoint: input.price,
+      spreadCents: 2,
+      categoryGroup: "politics",
+      structuralType: "threshold-range",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: 84,
+      catalystScore: 88,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: input.researchScore,
+      tradeOpportunityScore: input.tradeScore,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: {}
+    });
+
+    const runId1 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId1, [
+      market(runId1, {
+        key: "condition:shared-weaker",
+        eventSlug: "shared-event",
+        price: 0.48,
+        tradeScore: 70,
+        researchScore: 70
+      })
+    ]);
+
+    const first = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5,
+        maxEventPositions: 1,
+        maxEventExposureUsdc: 10
+      }
+    });
+
+    assert.equal(first.summary.proposedOrders, 1);
+
+    const later = new Date(now.getTime() + 60 * 60 * 1000);
+    const runId2 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: later.toISOString(),
+      completedAt: later.toISOString()
+    });
+    store.recordUniverseMarkets(runId2, [
+      market(runId2, {
+        key: "condition:shared-weaker",
+        eventSlug: "shared-event",
+        price: 0.47,
+        tradeScore: 70,
+        researchScore: 70
+      }),
+      market(runId2, {
+        key: "condition:shared-stronger",
+        eventSlug: "shared-event",
+        price: 0.35,
+        tradeScore: 98,
+        researchScore: 98
+      })
+    ]);
+
+    const second = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: later,
+      limit: 4
+    });
+
+    const eventExit = second.candidates.find((candidate) => candidate.action === "paper_sell_yes");
+    assert.equal(second.summary.exitOrders, 1);
+    assert.equal(eventExit?.marketKey, "condition:shared-weaker");
+    assert.ok(eventExit?.reasonCodes.includes("event_rotation"));
+    assert.equal(second.candidates.find((candidate) => candidate.marketKey === "condition:shared-stronger")?.blockers.includes("event_position_cap_reached"), true);
+
+    const redeployAt = new Date(later.getTime() + 60 * 1000);
+    const third = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: redeployAt,
+      limit: 4
+    });
+
+    assert.equal(third.candidates.find((candidate) => candidate.action === "paper_buy_yes")?.marketKey, "condition:shared-stronger");
+    assert.equal(third.ledger.summary.openPositionCount, 1);
+  });
+});
+
 test("auto-trader uses live actions and gates live guarded previews behind approval", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");
