@@ -3323,7 +3323,7 @@ export class StateStore {
     const session = this.getAutoTradingSession(sessionId);
     const positions = this.listPaperTradingPositions({ sessionId, limit: 1000 });
     const fills = this.listPaperTradingFills({ sessionId, limit: 1000 });
-    const spentUsdc = fills
+    const grossBuyCostUsdc = fills
       .filter((fill) => fill.side === "buy_yes")
       .reduce((sum, fill) => sum + fill.costUsdc, 0);
     const realizedProceedsUsdc = fills
@@ -3344,7 +3344,8 @@ export class StateStore {
       0
     );
     const budgetUsdc = session?.budgetUsdc ?? 0;
-    const remainingBudgetUsdc = Math.max(0, budgetUsdc - spentUsdc + realizedProceedsUsdc);
+    const remainingBudgetUsdc = Math.max(0, budgetUsdc - grossBuyCostUsdc + realizedProceedsUsdc);
+    const spentUsdc = Math.max(0, budgetUsdc - remainingBudgetUsdc);
     return {
       summary: {
         sessionId,

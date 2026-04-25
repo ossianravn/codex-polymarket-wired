@@ -471,6 +471,239 @@ test("auto-trader blocks new paper buys after session stop loss", async () => {
   });
 });
 
+test("auto-trader allocates limited budget by final decision score, not raw universe order", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    const market = (input: {
+      key: string;
+      eventSlug: string;
+      tradeOpportunityScore: number;
+      researchPriorityScore: number;
+      tradabilityScore: number;
+      catalystScore: number;
+      riskScore: number;
+    }) => ({
+      runId,
+      marketKey: input.key,
+      conditionId: input.key.replace("condition:", ""),
+      slug: input.key.replace("condition:", ""),
+      eventSlug: input.eventSlug,
+      eventTitle: input.eventSlug,
+      title: input.key,
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.5, 0.5],
+      clobTokenIds: [`${input.key}:yes`, `${input.key}:no`],
+      yesTokenId: `${input.key}:yes`,
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 10_000,
+      impliedProb: 0.5,
+      bestBid: 0.49,
+      bestAsk: 0.51,
+      midpoint: 0.5,
+      spreadCents: 2,
+      categoryGroup: "crypto",
+      structuralType: "threshold-range",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: input.tradabilityScore,
+      catalystScore: input.catalystScore,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 50,
+      crossMarketScore: 20,
+      researchPriorityScore: input.researchPriorityScore,
+      tradeOpportunityScore: input.tradeOpportunityScore,
+      makerScore: 50,
+      riskScore: input.riskScore,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {}
+    });
+    store.recordUniverseMarkets(runId, [
+      market({
+        key: "condition:raw-first-lower-final-score",
+        eventSlug: "raw-first",
+        tradeOpportunityScore: 100,
+        researchPriorityScore: 50,
+        tradabilityScore: 50,
+        catalystScore: 50,
+        riskScore: 20
+      }),
+      market({
+        key: "condition:raw-second-higher-final-score",
+        eventSlug: "raw-second",
+        tradeOpportunityScore: 80,
+        researchPriorityScore: 100,
+        tradabilityScore: 100,
+        catalystScore: 100,
+        riskScore: 5
+      })
+    ]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 5,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5,
+        maxEventExposureUsdc: 5
+      }
+    });
+
+    assert.equal(result.summary.proposedOrders, 1);
+    assert.equal(result.candidates.find((candidate) => candidate.action === "paper_buy_yes")?.marketKey, "condition:raw-second-higher-final-score");
+    assert.equal(result.candidates.find((candidate) => candidate.marketKey === "condition:raw-first-lower-final-score")?.blockers.includes("budget_exhausted"), true);
+  });
+});
+
+test("auto-trader rotates paper budget by exiting weak positions for stronger candidates", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const market = (runId: string, input: {
+      key: string;
+      eventSlug: string;
+      price: number;
+      tradeScore: number;
+    }) => ({
+      runId,
+      marketKey: input.key,
+      conditionId: input.key.replace("condition:", ""),
+      slug: input.key.replace("condition:", ""),
+      eventSlug: input.eventSlug,
+      eventTitle: input.eventSlug,
+      title: input.key,
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [input.price, Number((1 - input.price).toFixed(4))],
+      clobTokenIds: [`${input.key}:yes`, `${input.key}:no`],
+      yesTokenId: `${input.key}:yes`,
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 25_000,
+      impliedProb: input.price,
+      bestBid: input.price,
+      bestAsk: Number(Math.min(0.99, input.price + 0.02).toFixed(4)),
+      midpoint: input.price,
+      spreadCents: 2,
+      categoryGroup: "crypto",
+      structuralType: "threshold-range",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: 84,
+      catalystScore: 88,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 84,
+      tradeOpportunityScore: input.tradeScore,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: {}
+    });
+
+    const runId1 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId1, [
+      market(runId1, { key: "condition:weak-held", eventSlug: "weak-held", price: 0.5, tradeScore: 60 })
+    ]);
+
+    const first = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 5,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5,
+        maxEventExposureUsdc: 5
+      }
+    });
+
+    assert.equal(first.summary.proposedOrders, 1);
+    assert.equal(first.summary.remainingBudgetUsdc, 0);
+
+    const later = new Date(now.getTime() + 60 * 60 * 1000);
+    const runId2 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: later.toISOString(),
+      completedAt: later.toISOString()
+    });
+    store.recordUniverseMarkets(runId2, [
+      market(runId2, { key: "condition:weak-held", eventSlug: "weak-held", price: 0.45, tradeScore: 60 }),
+      market(runId2, { key: "condition:strong-fresh", eventSlug: "strong-fresh", price: 0.42, tradeScore: 98 })
+    ]);
+
+    const second = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: later,
+      limit: 4
+    });
+
+    const rotationExit = second.candidates.find((candidate) => candidate.action === "paper_sell_yes");
+    assert.equal(second.summary.exitOrders, 1);
+    assert.equal(rotationExit?.marketKey, "condition:weak-held");
+    assert.ok(rotationExit?.reasonCodes.includes("budget_rotation"));
+    assert.equal(second.candidates.find((candidate) => candidate.marketKey === "condition:strong-fresh")?.blockers.includes("budget_exhausted"), true);
+    assert.equal(second.summary.openPositions, 0);
+    assert.equal(second.summary.remainingBudgetUsdc, 4.5);
+
+    const redeployAt = new Date(later.getTime() + 60 * 1000);
+    const third = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: redeployAt,
+      limit: 4
+    });
+
+    const redeploy = third.candidates.find((candidate) => candidate.action === "paper_buy_yes");
+    assert.equal(redeploy?.marketKey, "condition:strong-fresh");
+    assert.equal(third.summary.spentUsdc, 5);
+    assert.equal(third.summary.remainingBudgetUsdc, 0);
+    assert.ok(third.ledger.summary.spentUsdc <= third.ledger.summary.budgetUsdc);
+  });
+});
+
 test("auto-trader uses live actions and gates live guarded previews behind approval", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");
@@ -778,6 +1011,106 @@ test("auto-trader includes ending-soon markets beyond the top opportunity pool",
     });
 
     assert.equal(result.candidates[0]?.marketKey, "condition:near-valid");
+    assert.equal(result.candidates[0]?.action, "paper_buy_yes");
+    assert.equal(result.summary.proposedOrders, 1);
+  });
+});
+
+test("auto-trader pages past stale ending-soon rows to find eligible same-day markets", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+
+    const market = (input: {
+      key: string;
+      title: string;
+      endHours: number;
+      tradeScore: number;
+      volume24hUsd: number;
+    }) => ({
+      runId,
+      marketKey: input.key,
+      conditionId: input.key.replace("condition:", ""),
+      slug: input.key.replace("condition:", ""),
+      eventSlug: input.key.replace("condition:", ""),
+      eventTitle: input.title,
+      title: input.title,
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.24, 0.76],
+      clobTokenIds: [`${input.key}:yes`, `${input.key}:no`],
+      yesTokenId: `${input.key}:yes`,
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, input.endHours),
+      liquidityUsd: 25_000,
+      volume24hUsd: input.volume24hUsd,
+      impliedProb: 0.24,
+      bestBid: 0.235,
+      bestAsk: 0.245,
+      midpoint: 0.24,
+      spreadCents: 1,
+      categoryGroup: "crypto",
+      structuralType: "threshold-range",
+      horizonBucket: input.endHours <= 24 ? "resolves-today" : "short-0-7d",
+      priceBucket: "cheap-10-30c",
+      liquidityBucket: "tradable",
+      spreadBucket: "tight-0-1c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 78,
+      tradabilityScore: 80,
+      catalystScore: 85,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 78,
+      tradeOpportunityScore: input.tradeScore,
+      makerScore: 55,
+      riskScore: 18,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: {}
+    });
+
+    store.recordUniverseMarkets(runId, [
+      ...Array.from({ length: 650 }, (_, index) => market({
+        key: `condition:stale-${index}`,
+        title: `Already-ended market ${index}`,
+        endHours: -2,
+        tradeScore: 99,
+        volume24hUsd: 100_000
+      })),
+      market({
+        key: "condition:same-day-valid",
+        title: "Same-day valid volatile market",
+        endHours: 12,
+        tradeScore: 60,
+        volume24hUsd: 500
+      })
+    ]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 5,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+
+    assert.equal(result.candidates[0]?.marketKey, "condition:same-day-valid");
     assert.equal(result.candidates[0]?.action, "paper_buy_yes");
     assert.equal(result.summary.proposedOrders, 1);
   });

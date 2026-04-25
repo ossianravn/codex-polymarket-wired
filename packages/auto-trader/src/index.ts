@@ -408,6 +408,19 @@ function isExitAction(action: AutoTradingAction): boolean {
   return action === "paper_sell_yes" || action === "live_sell_yes";
 }
 
+function decisionStatusRank(decision: AutoTradingDecision): number {
+  if (decision.status === "proposed") {
+    return 0;
+  }
+  if (decision.status === "research") {
+    return 1;
+  }
+  if (decision.status === "watch") {
+    return 2;
+  }
+  return 3;
+}
+
 function actionSide(action: AutoTradingAction): "BUY" | "SELL" | undefined {
   if (isEntryAction(action)) {
     return "BUY";
@@ -717,6 +730,117 @@ function buildPaperExitDecisions(
     .filter((decision) => isExitAction(decision.action));
 }
 
+function budgetRotationEdgeThreshold(riskProfile: AutoTradingRiskProfile): number {
+  switch (riskProfile) {
+    case "aggressive":
+      return 8;
+    case "balanced":
+      return 12;
+    case "conservative":
+      return 18;
+  }
+}
+
+function paperPositionEntryScore(position: StoredPaperTradingLedger["positions"][number]): number {
+  return asNumber(position.metadata.score) ?? 0;
+}
+
+function paperPositionRotationRank(position: StoredPaperTradingLedger["positions"][number]): number {
+  const pnlPct = position.unrealizedPnlPct ?? 0;
+  return paperPositionEntryScore(position) + pnlPct * 0.25;
+}
+
+function buildBudgetRotationExitDecisions(
+  ledger: StoredPaperTradingLedger,
+  mandate: AutoTradingMandate,
+  session: StoredAutoTradingSessionRecord,
+  now: Date,
+  candidates: AutoTradingDecision[],
+  existingExitMarketKeys: Set<string>
+): AutoTradingDecision[] {
+  if (mandate.mode !== "paper" || ledger.summary.remainingBudgetUsdc > 0.01) {
+    return [];
+  }
+
+  const strongestBudgetBlockedCandidate = candidates
+    .filter((candidate) =>
+      candidate.status === "watch" &&
+      candidate.blockers.includes("budget_exhausted") &&
+      candidate.score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold
+    )
+    .sort((left, right) => right.score - left.score)[0];
+  if (!strongestBudgetBlockedCandidate) {
+    return [];
+  }
+
+  const threshold = budgetRotationEdgeThreshold(mandate.riskProfile);
+  const weakestPosition = ledger.positions
+    .filter((position) =>
+      position.status === "open" &&
+      !existingExitMarketKeys.has(position.marketKey) &&
+      position.currentPrice !== undefined &&
+      position.currentValueUsdc !== undefined &&
+      position.shares > 0
+    )
+    .map((position) => {
+      const entryScore = paperPositionEntryScore(position);
+      const scoreEdge = strongestBudgetBlockedCandidate.score - entryScore;
+      const lossAssistedThreshold = (position.unrealizedPnlPct ?? 0) < 0 ? threshold / 2 : threshold;
+      return { position, entryScore, scoreEdge, lossAssistedThreshold };
+    })
+    .filter((entry) => entry.scoreEdge >= entry.lossAssistedThreshold)
+    .sort((left, right) => {
+      const rankDelta = paperPositionRotationRank(left.position) - paperPositionRotationRank(right.position);
+      return rankDelta !== 0 ? rankDelta : right.scoreEdge - left.scoreEdge;
+    })[0];
+  if (!weakestPosition) {
+    return [];
+  }
+
+  const position = weakestPosition.position;
+  const market = {
+    marketKey: position.marketKey,
+    title: position.title,
+    eventKey: position.metadata.eventKey,
+    endDate: position.metadata.endDate,
+    currentPrice: position.currentPrice,
+    averagePrice: position.averagePrice,
+    shares: position.shares,
+    unrealizedPnlPct: position.unrealizedPnlPct,
+    unrealizedPnlUsdc: position.unrealizedPnlUsdc,
+    rotationCandidate: {
+      marketKey: strongestBudgetBlockedCandidate.marketKey,
+      title: strongestBudgetBlockedCandidate.title,
+      score: strongestBudgetBlockedCandidate.score,
+      targetPrice: strongestBudgetBlockedCandidate.targetPrice,
+      eventSlug: strongestBudgetBlockedCandidate.market.eventSlug
+    }
+  };
+  const decision = {
+    marketKey: position.marketKey,
+    title: position.title,
+    action: exitActionForMode(mandate.mode),
+    status: "proposed" as const,
+    score: clampScore(80 + weakestPosition.scoreEdge),
+    allocatedBudgetUsdc: roundMoney(position.currentValueUsdc as number),
+    targetPrice: position.currentPrice,
+    shares: position.shares,
+    tokenId: typeof position.metadata.tokenId === "string" ? position.metadata.tokenId : undefined,
+    reasonCodes: [
+      "budget_rotation",
+      `candidate_score:${strongestBudgetBlockedCandidate.score}`,
+      `position_score:${Number(weakestPosition.entryScore.toFixed(2))}`
+    ],
+    blockers: [],
+    market
+  } satisfies AutoTradingDecision;
+
+  return [{
+    ...decision,
+    nextCheckAt: nextCheckForDecision(decision, mandate, now)
+  }];
+}
+
 function marketIdentity(market: Record<string, unknown>): string {
   for (const key of ["marketKey", "conditionId", "slug", "title"]) {
     const value = market[key];
@@ -741,6 +865,28 @@ function mergeMarketPools(pools: Array<Array<Record<string, unknown>>>): Array<R
     }
   }
   return merged;
+}
+
+function listUniverseMarketsPaged(
+  store: StateStore,
+  filters: Parameters<StateStore["listUniverseMarkets"]>[0],
+  totalLimit: number
+): Array<Record<string, unknown>> {
+  const output: Array<Record<string, unknown>> = [];
+  const pageSize = 500;
+  const maxRows = Math.max(1, Math.min(5_000, totalLimit));
+  for (let offset = 0; output.length < maxRows; offset += pageSize) {
+    const page = store.listUniverseMarkets({
+      ...filters,
+      limit: Math.min(pageSize, maxRows - output.length),
+      offset
+    }).markets;
+    output.push(...page);
+    if (page.length < pageSize) {
+      break;
+    }
+  }
+  return output;
 }
 
 function createSession(store: StateStore, mandate: AutoTradingMandate, now: Date): StoredAutoTradingSessionRecord {
@@ -1014,6 +1160,7 @@ export function runAutoTradingIteration(
   }
 
   const candidatePoolLimit = Math.max(250, limit * 20);
+  const horizonPoolLimit = Math.max(1_000, limit * 80);
   const baseUniverseFilters = {
     runId,
     minLiquidityUsdc: Math.max(0, mandate.minLiquidityUsdc * 0.5),
@@ -1021,18 +1168,18 @@ export function runAutoTradingIteration(
     limit: candidatePoolLimit
   } as const;
   const rawMarkets = mergeMarketPools([
-    store.listUniverseMarkets({
+    listUniverseMarketsPaged(store, {
       ...baseUniverseFilters,
       sort: "trade_opportunity_desc"
-    }).markets,
-    store.listUniverseMarkets({
+    }, candidatePoolLimit),
+    listUniverseMarketsPaged(store, {
       ...baseUniverseFilters,
       sort: "ending_soon"
-    }).markets,
-    store.listUniverseMarkets({
+    }, horizonPoolLimit),
+    listUniverseMarketsPaged(store, {
       ...baseUniverseFilters,
       sort: "volume_24h_desc"
-    }).markets
+    }, candidatePoolLimit)
   ]);
 
   let remainingBudget = ledger.summary.remainingBudgetUsdc;
@@ -1043,10 +1190,12 @@ export function runAutoTradingIteration(
     eventExposureUsdc.set(eventKey, (eventExposureUsdc.get(eventKey) ?? 0) + position.costUsdc);
     eventPositionCount.set(eventKey, (eventPositionCount.get(eventKey) ?? 0) + 1);
   }
-  const decisions: AutoTradingDecision[] = rawMarkets
-    .map((market) => {
+  const scoredRawMarkets = rawMarkets
+    .map((market) => ({ market, score: scoreMarket(market, mandate, now) }))
+    .sort((left, right) => right.score - left.score);
+  const decisions: AutoTradingDecision[] = scoredRawMarkets
+    .map(({ market, score }) => {
       const blockers = marketBlockers(market, mandate, now);
-      const score = scoreMarket(market, mandate, now);
       const targetPrice = targetPriceForPassiveBuy(market);
       const tokenId = typeof market.yesTokenId === "string" ? market.yesTokenId : asStringArray(market.clobTokenIds).at(0);
       const eventKey = eventIdentity(market);
@@ -1068,10 +1217,6 @@ export function runAutoTradingIteration(
           action = "monitor";
           status = "watch";
           blockers.push("session_stop_loss_reached");
-        } else if (remainingBudget <= 0) {
-          action = "monitor";
-          status = "watch";
-          blockers.push("budget_exhausted");
         } else if ((eventPositionCount.get(eventKey) ?? 0) >= mandate.maxEventPositions) {
           action = "monitor";
           status = "watch";
@@ -1080,6 +1225,10 @@ export function runAutoTradingIteration(
           action = "monitor";
           status = "watch";
           blockers.push("event_exposure_cap_reached");
+        } else if (remainingBudget <= 0) {
+          action = "monitor";
+          status = "watch";
+          blockers.push("budget_exhausted");
         } else {
           action = entryActionForMode(mandate.mode);
           status = "proposed";
@@ -1125,10 +1274,23 @@ export function runAutoTradingIteration(
     .sort((left, right) => {
       if (left.status === "proposed" && right.status !== "proposed") return -1;
       if (right.status === "proposed" && left.status !== "proposed") return 1;
+      const statusRankDelta = decisionStatusRank(left) - decisionStatusRank(right);
+      if (statusRankDelta !== 0) return statusRankDelta;
       return right.score - left.score;
     })
     .slice(0, limit);
 
+  const rotationExitDecisions = mandate.mode === "paper"
+    ? buildBudgetRotationExitDecisions(
+      ledger,
+      mandate,
+      session,
+      now,
+      decisions,
+      new Set(exitDecisions.map((decision) => decision.marketKey).filter((value): value is string => Boolean(value)))
+    )
+    : [];
+  exitDecisions = [...exitDecisions, ...rotationExitDecisions];
   const openPositionsAfterExits = Math.max(0, ledger.summary.openPositionCount - exitDecisions.length);
   const allowedNewBuys = Math.max(0, mandate.maxOpenPositions - openPositionsAfterExits);
   let proposedBuyCount = 0;
