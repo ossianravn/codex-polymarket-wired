@@ -736,6 +736,7 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         portfolioValueUsdc: compact.summary.portfolioValueUsdc,
         materialChanges,
         actionCounts: actionCounts(iteration.candidates),
+        blockerCounts: compact.summary.blockerCounts,
         paperBuyProposalCount: paperBuys.length,
         paperExitProposalCount: paperExits.length,
         paperBuyProposals: paperBuys,

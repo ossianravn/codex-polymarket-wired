@@ -99,6 +99,273 @@ test("forecast writer seals independent forecast artifacts without venue-price e
   });
 });
 
+test("forecast writer uses exclusive-field base rates and keeps low-confidence screening research-only", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    const eventMarkets = [
+      ...Array.from({ length: 20 }, (_, index) => ({
+      id: `candidate-${index}`,
+      active: true,
+      closed: false
+      })),
+      { id: "closed-candidate", active: "true", closed: "true" },
+      { id: "archived-candidate", active: "true", archived: "true" }
+    ];
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:exclusive-outsider",
+      conditionId: "exclusive-outsider",
+      slug: "exclusive-outsider",
+      eventSlug: "many-candidate-election",
+      title: "Will Candidate 17 win?",
+      tags: ["test"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.03, 0.97],
+      clobTokenIds: ["yes", "no"],
+      yesTokenId: "yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 25_000,
+      impliedProb: 0.03,
+      bestBid: 0.03,
+      bestAsk: 0.031,
+      midpoint: 0.0305,
+      spreadCents: 0.1,
+      negRisk: true,
+      structuralType: "single-binary",
+      categoryGroup: "politics",
+      modelabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 10,
+      riskScore: 5,
+      researchPriorityScore: 95,
+      tradeOpportunityScore: 98,
+      tradabilityScore: 95,
+      reasonCodes: ["clear_resolution_text", "neg_risk_cluster"],
+      disqualifiers: [],
+      rawJson: {
+        rawGammaEvent: {
+          negRisk: true,
+          enableNegRisk: true,
+          markets: eventMarkets
+        }
+      }
+    }]);
+
+    runIndependentForecastWriter(store, { runId, now, limit: 10 });
+    const market = store.getUniverseMarket(runId, "condition:exclusive-outsider");
+    const forecast = (market?.rawJson as Record<string, unknown>).independentForecast as Record<string, unknown>;
+    const evidence = forecast.evidence as Record<string, unknown>;
+    assert.equal(evidence.baseRateReason, "exclusive_field_uniform_prior");
+    assert.equal(evidence.exclusiveGroupSize, 20);
+    assert.equal(evidence.confidenceTier, "screening-low");
+    assert.equal((evidence.sourceFields as string[]).includes("rawGammaEvent.markets"), true);
+    assert.ok((forecast.probability as number) < 0.15);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 5,
+      persist: false,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+
+    assert.equal(result.summary.proposedOrders, 0);
+    assert.equal(result.summary.blockerCounts.independent_forecast_low_confidence_screening, 1);
+    assert.equal(result.candidates[0]?.action, "research_required");
+    assert.equal(result.candidates[0]?.blockers.includes("independent_forecast_low_confidence_screening"), true);
+    assert.equal(result.candidates[0]?.reasonCodes.includes("exclusive_group_size:20"), true);
+  });
+});
+
+test("forecast writer does not treat ordinary multi-market events as exclusive fields", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:ordinary-series-market",
+      conditionId: "ordinary-series-market",
+      slug: "ordinary-series-market",
+      eventSlug: "ordinary-token-launch-deadlines",
+      title: "Will Example launch a token by June 30?",
+      tags: ["test"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.2, 0.8],
+      clobTokenIds: ["yes", "no"],
+      yesTokenId: "yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 25_000,
+      impliedProb: 0.2,
+      bestBid: 0.2,
+      bestAsk: 0.205,
+      midpoint: 0.2025,
+      spreadCents: 0.5,
+      negRisk: false,
+      structuralType: "single-binary",
+      categoryGroup: "crypto",
+      modelabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 10,
+      riskScore: 5,
+      researchPriorityScore: 95,
+      tradeOpportunityScore: 98,
+      tradabilityScore: 95,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {
+        rawGammaEvent: {
+          negRisk: false,
+          enableNegRisk: false,
+          markets: Array.from({ length: 6 }, (_, index) => ({
+            id: `deadline-${index}`,
+            active: true,
+            closed: false
+          }))
+        }
+      }
+    }]);
+
+    runIndependentForecastWriter(store, { runId, now, limit: 10 });
+    const market = store.getUniverseMarket(runId, "condition:ordinary-series-market");
+    const forecast = (market?.rawJson as Record<string, unknown>).independentForecast as Record<string, unknown>;
+    const evidence = forecast.evidence as Record<string, unknown>;
+    assert.equal(evidence.baseRateReason, "binary_balanced_prior");
+    assert.equal(evidence.exclusiveGroupSize, undefined);
+    assert.equal(evidence.confidenceTier, "screening-medium");
+    assert.equal((evidence.sourceFields as string[]).includes("rawGammaEvent.markets"), false);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 5,
+      persist: false,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+
+    assert.notEqual(result.summary.blockerCounts.independent_forecast_low_confidence_screening, 1);
+    assert.equal(result.candidates[0]?.blockers.includes("independent_forecast_low_confidence_screening"), false);
+  });
+});
+
+test("auto-trader treats legacy screening forecasts on exclusive fields as research-only", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:legacy-exclusive",
+      conditionId: "legacy-exclusive",
+      slug: "legacy-exclusive",
+      eventSlug: "legacy-exclusive-field",
+      title: "Will Legacy Candidate win?",
+      tags: ["test"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.03, 0.97],
+      clobTokenIds: ["yes", "no"],
+      yesTokenId: "yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 25_000,
+      impliedProb: 0.03,
+      bestBid: 0.03,
+      bestAsk: 0.031,
+      midpoint: 0.0305,
+      spreadCents: 0.1,
+      negRisk: true,
+      structuralType: "single-binary",
+      categoryGroup: "politics",
+      modelabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 10,
+      riskScore: 5,
+      researchPriorityScore: 95,
+      tradeOpportunityScore: 98,
+      tradabilityScore: 95,
+      reasonCodes: ["clear_resolution_text", "neg_risk_cluster"],
+      disqualifiers: [],
+      rawJson: {
+        rawGammaEvent: {
+          negRisk: true,
+          enableNegRisk: true,
+          markets: Array.from({ length: 20 }, (_, index) => ({
+            id: `candidate-${index}`,
+            active: true,
+            closed: false
+          }))
+        },
+        independentForecast: {
+          sealed: true,
+          probability: 0.65,
+          uncertainty: 0.06,
+          forecastedAt: now.toISOString(),
+          expiresAt: isoAfter(now, 6),
+          numericalChecks: ["legacy_screening_fixture"],
+          usesVenuePrice: false,
+          method: "screening_forecast_v0"
+        }
+      }
+    }]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 5,
+      persist: false,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+
+    assert.equal(result.summary.proposedOrders, 0);
+    assert.equal(result.summary.blockerCounts.independent_forecast_low_confidence_screening, 1);
+    assert.equal(result.candidates[0]?.action, "research_required");
+    assert.equal(result.candidates[0]?.blockers.includes("independent_forecast_low_confidence_screening"), true);
+  });
+});
+
 test("forecast writer lets paper auto-trader propose entries under forecast gate", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-25T12:00:00.000Z");

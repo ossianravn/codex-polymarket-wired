@@ -1246,9 +1246,12 @@ export class StateStore {
         updated_at TEXT NOT NULL
       );
 
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_market_id ON markets(market_id) WHERE market_id IS NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_condition_id ON markets(condition_id) WHERE condition_id IS NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_slug ON markets(slug) WHERE slug IS NOT NULL;
+      DROP INDEX IF EXISTS idx_markets_market_id;
+      DROP INDEX IF EXISTS idx_markets_condition_id;
+      DROP INDEX IF EXISTS idx_markets_slug;
+      CREATE INDEX IF NOT EXISTS idx_markets_market_id ON markets(market_id) WHERE market_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_markets_condition_id ON markets(condition_id) WHERE condition_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_markets_slug ON markets(slug) WHERE slug IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS market_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2152,6 +2155,7 @@ export class StateStore {
     const row = this.db.prepare(`
       SELECT *
       FROM universe_runs
+      WHERE status = 'completed'
       ORDER BY started_at DESC, run_id DESC
       LIMIT 1
     `).get();

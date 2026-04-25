@@ -120,6 +120,7 @@ export interface AutoTradingIterationResult {
     exitOrders: number;
     researchRequired: number;
     blocked: number;
+    blockerCounts: Record<string, number>;
     riskBlockedNewBuys: boolean;
     nextRunAt?: string;
   };
@@ -807,6 +808,75 @@ function independentForecastArtifact(market: Record<string, unknown>): Record<st
   return asRecord(rawJson?.independentForecast);
 }
 
+function booleanFlag(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no"].includes(normalized)) {
+      return false;
+    }
+  }
+  return undefined;
+}
+
+function marketLooksActive(record: Record<string, unknown>): boolean {
+  const hasStatusFlag = "active" in record || "closed" in record || "archived" in record;
+  if (!hasStatusFlag) {
+    return false;
+  }
+  return booleanFlag(record.active) !== false &&
+    booleanFlag(record.closed) !== true &&
+    booleanFlag(record.archived) !== true;
+}
+
+function hasExclusiveFieldSignal(market: Record<string, unknown>): boolean {
+  if (market.structuralType === "multi-outcome-exclusive") {
+    return true;
+  }
+  if (booleanFlag(market.negRisk) === true || asStringArray(market.reasonCodes).includes("neg_risk_cluster")) {
+    return true;
+  }
+  const rawJson = asRecord(market.rawJson);
+  const rawGammaEvent = asRecord(rawJson?.rawGammaEvent);
+  return booleanFlag(rawGammaEvent?.negRisk) === true || booleanFlag(rawGammaEvent?.enableNegRisk) === true;
+}
+
+function inferredExclusiveFieldSize(market: Record<string, unknown>): number | undefined {
+  if (!hasExclusiveFieldSignal(market)) {
+    return undefined;
+  }
+
+  const rawJson = asRecord(market.rawJson);
+  const rawGammaEvent = asRecord(rawJson?.rawGammaEvent);
+  const eventMarkets = rawGammaEvent?.markets;
+  if (Array.isArray(eventMarkets)) {
+    const activeMarkets = eventMarkets.filter((value) => {
+      const record = asRecord(value);
+      return record && marketLooksActive(record);
+    });
+    if (activeMarkets.length >= 3) {
+      return activeMarkets.length;
+    }
+  }
+
+  if (market.structuralType === "multi-outcome-exclusive") {
+    const outcomes = asStringArray(market.outcomes);
+    if (outcomes.length >= 3) {
+      return outcomes.length;
+    }
+  }
+
+  return undefined;
+}
+
 function evaluateIndependentForecastEdge(
   market: Record<string, unknown>,
   executionPrice: number,
@@ -832,6 +902,25 @@ function evaluateIndependentForecastEdge(
   }
   if (mandate.mode !== "paper" && forecast.method === "screening_forecast_v0") {
     blockers.push("independent_forecast_screening_only");
+  }
+  const forecastEvidence = asRecord(forecast.evidence);
+  if (
+    mandate.mode === "paper" &&
+    forecast.method === "screening_forecast_v0" &&
+    (
+      forecastEvidence?.confidenceTier === "screening-low" ||
+      inferredExclusiveFieldSize(market) !== undefined
+    )
+  ) {
+    blockers.push("independent_forecast_low_confidence_screening");
+    reasonCodes.push("forecast_gate:low_confidence_screening");
+    if (typeof forecastEvidence?.confidenceTier === "string") {
+      reasonCodes.push(`forecast_confidence_tier:${forecastEvidence.confidenceTier}`);
+    }
+    const exclusiveFieldSize = inferredExclusiveFieldSize(market);
+    if (exclusiveFieldSize !== undefined) {
+      reasonCodes.push(`exclusive_group_size:${exclusiveFieldSize}`);
+    }
   }
   if (forecast.usesVenuePrice === true || forecast.usesMarketPrice === true || forecast.priceContaminated === true) {
     blockers.push("independent_forecast_price_contaminated");
@@ -1581,6 +1670,18 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function blockerCounts(decisions: AutoTradingDecision[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const decision of decisions) {
+    for (const blocker of decision.blockers) {
+      counts[blocker] = (counts[blocker] ?? 0) + 1;
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(counts).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+  );
+}
+
 export function compactAutoTradingDecision(decision: AutoTradingDecision): CompactAutoTradingDecision {
   return {
     marketKey: decision.marketKey,
@@ -1806,6 +1907,7 @@ export function runAutoTradingIteration(
         exitOrders: 0,
         researchRequired: 0,
         blocked: 1,
+        blockerCounts: blockerCounts([decision]),
         riskBlockedNewBuys,
         nextRunAt: addMinutes(now, mandate.heartbeatMinutes)
       },
@@ -2190,6 +2292,7 @@ export function runAutoTradingIteration(
       exitOrders: cappedDecisions.filter((decision) => isExitAction(decision.action)).length,
       researchRequired: cappedDecisions.filter((decision) => decision.action === "research_required").length,
       blocked: cappedDecisions.filter((decision) => decision.status === "blocked").length,
+      blockerCounts: blockerCounts(cappedDecisions),
       riskBlockedNewBuys,
       nextRunAt
     },

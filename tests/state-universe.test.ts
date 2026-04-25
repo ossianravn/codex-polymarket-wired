@@ -194,6 +194,118 @@ test("universe run lifecycle persists rows, sorting, and facets", async () => {
   });
 });
 
+test("universe market snapshots tolerate duplicate provider slugs", async () => {
+  await withTempStore((store) => {
+    const runId = store.startUniverseRun({
+      source: "gamma_events",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "running"
+    });
+
+    const baseMarket = {
+      runId,
+      title: "Duplicate slug fixture",
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.2, 0.8],
+      clobTokenIds: ["yes", "no"],
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      liquidityUsd: 10_000,
+      volume24hUsd: 1_000,
+      spreadCents: 2,
+      categoryGroup: "crypto",
+      structuralType: "single-binary",
+      horizonBucket: "short-0-7d",
+      priceBucket: "cheap-10-30c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "deep-research",
+      modelabilityScore: 70,
+      tradabilityScore: 70,
+      catalystScore: 70,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 50,
+      crossMarketScore: 20,
+      researchPriorityScore: 70,
+      tradeOpportunityScore: 70,
+      makerScore: 50,
+      riskScore: 20,
+      reasonCodes: ["binary_market"],
+      disqualifiers: [],
+      rawJson: {}
+    };
+
+    const inserted = store.recordUniverseMarkets(runId, [
+      {
+        ...baseMarket,
+        marketKey: "condition:duplicate-slug-a",
+        marketId: "provider-reused-market-id",
+        conditionId: "duplicate-slug-a",
+        slug: "provider-reused-slug",
+        title: "Duplicate slug fixture A",
+        yesTokenId: "yes-a",
+        noTokenId: "no-a"
+      },
+      {
+        ...baseMarket,
+        marketKey: "condition:duplicate-slug-b",
+        marketId: "provider-reused-market-id",
+        conditionId: "duplicate-slug-b",
+        slug: "provider-reused-slug",
+        title: "Duplicate slug fixture B",
+        yesTokenId: "yes-b",
+        noTokenId: "no-b"
+      }
+    ]);
+
+    assert.equal(inserted, 2);
+    assert.equal(store.getUniverseMarket(runId, "condition:duplicate-slug-a")?.marketId, "provider-reused-market-id");
+    assert.equal(store.getUniverseMarket(runId, "condition:duplicate-slug-b")?.marketId, "provider-reused-market-id");
+    assert.equal(store.getUniverseMarket(runId, "condition:duplicate-slug-a")?.slug, "provider-reused-slug");
+    assert.equal(store.getUniverseMarket(runId, "condition:duplicate-slug-b")?.slug, "provider-reused-slug");
+  });
+});
+
+test("latest universe run ignores failed refresh attempts", async () => {
+  await withTempStore((store) => {
+    const completedRunId = store.startUniverseRun({
+      source: "gamma_events",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "running",
+      startedAt: "2026-04-25T12:00:00.000Z"
+    });
+    store.completeUniverseRun(completedRunId, {
+      status: "completed",
+      completedAt: "2026-04-25T12:00:10.000Z",
+      totalMarkets: 1,
+      totalEvents: 1,
+      enrichedMarkets: 1
+    });
+
+    const failedRunId = store.startUniverseRun({
+      source: "gamma_events",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "running",
+      startedAt: "2026-04-25T12:01:00.000Z"
+    });
+    store.completeUniverseRun(failedRunId, {
+      status: "failed",
+      completedAt: "2026-04-25T12:01:10.000Z",
+      error: "provider duplicate slug"
+    });
+
+    assert.equal(store.getLatestUniverseRun()?.runId, completedRunId);
+    assert.equal(store.getUniverseRun(failedRunId)?.status, "failed");
+  });
+});
+
 test("universe event clusters identify many-participant outsider convexity setups", async () => {
   await withTempStore((store) => {
     const runId = store.startUniverseRun({
