@@ -8,6 +8,7 @@ import {
   parseDaemonArgs,
   runDaemonOnce,
   sessionDueStatus,
+  universeRefreshDecision,
   type AutotraderDaemonOptions
 } from "../scripts/autotrader-daemon.js";
 import { openStateStore, type StoredAutoTradingSessionRecord } from "../packages/state-store/src/index.js";
@@ -59,7 +60,45 @@ test("daemon argument parser defaults to paper loop and supports once mode", () 
   assert.equal(options.mode, "paper");
   assert.equal(options.sessionId, "abc");
   assert.equal(options.limit, 7);
+  assert.equal(options.autoRefreshUniverse, true);
   assert.equal(options.stateDbPath, "state/test.sqlite");
+});
+
+test("universe refresh decision only refreshes missing or stale discovery runs", () => {
+  const now = new Date("2026-04-25T12:00:00.000Z");
+  const disabled = universeRefreshDecision(null, { autoRefreshUniverse: false, maxUniverseAgeMinutes: 10 }, now);
+  assert.equal(disabled.shouldRefresh, false);
+  assert.equal(disabled.reason, "disabled");
+  assert.equal(disabled.maxAgeMinutes, 10);
+  assert.equal(disabled.latestRunId, undefined);
+  assert.deepEqual(
+    universeRefreshDecision(null, { autoRefreshUniverse: true, maxUniverseAgeMinutes: 10 }, now),
+    {
+      shouldRefresh: true,
+      reason: "missing",
+      maxAgeMinutes: 10
+    }
+  );
+
+  const fresh = universeRefreshDecision(
+    { runId: "run-1", completedAt: "2026-04-25T11:55:00.000Z" },
+    { autoRefreshUniverse: true, maxUniverseAgeMinutes: 10 },
+    now
+  );
+  assert.equal(fresh.shouldRefresh, false);
+  assert.equal(fresh.reason, "fresh");
+  assert.equal(fresh.latestRunId, "run-1");
+  assert.equal(fresh.ageMinutes, 5);
+
+  const stale = universeRefreshDecision(
+    { runId: "run-2", completedAt: "2026-04-25T11:40:00.000Z" },
+    { autoRefreshUniverse: true, maxUniverseAgeMinutes: 10 },
+    now
+  );
+  assert.equal(stale.shouldRefresh, true);
+  assert.equal(stale.reason, "stale");
+  assert.equal(stale.latestRunId, "run-2");
+  assert.equal(stale.ageMinutes, 20);
 });
 
 test("daemon due status respects latest iteration next_check_at", () => {
@@ -153,6 +192,7 @@ test("daemon once skips a not-due paper session without MCP or live execution", 
         schedulerSlackSeconds: 30,
         limit: 5,
         autoForecast: false,
+        autoRefreshUniverse: false,
         stateDbPath: dbPath,
         latestReportPath: path.join(dir, "latest.json"),
         observationLogPath: path.join(dir, "daemon.jsonl"),
@@ -214,6 +254,7 @@ test("daemon once includes paper execution report on run observations", async ()
         schedulerSlackSeconds: 30,
         limit: 5,
         autoForecast: false,
+        autoRefreshUniverse: false,
         stateDbPath: dbPath,
         latestReportPath: path.join(dir, "latest.json"),
         observationLogPath: path.join(dir, "daemon.jsonl"),
@@ -224,8 +265,11 @@ test("daemon once includes paper execution report on run observations", async ()
       const report = await runDaemonOnce(options, new Date("2026-04-25T12:00:00.000Z"));
       const observations = report.observations as Array<Record<string, unknown>>;
       const executionReport = observations[0]?.paperExecutionReport as Record<string, unknown> | undefined;
+      const universeRefresh = observations[0]?.universeRefresh as Record<string, unknown> | undefined;
       assert.equal(report.ok, true);
       assert.equal(observations[0]?.ran, true);
+      assert.equal(universeRefresh?.refreshed, false);
+      assert.equal(universeRefresh?.reason, "disabled");
       assert.equal(executionReport?.orderCount, 0);
       assert.equal(executionReport?.notionalFillRate, 0);
       assert.deepEqual(observations[0]?.materialChanges, []);

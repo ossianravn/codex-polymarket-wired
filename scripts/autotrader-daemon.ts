@@ -10,12 +10,21 @@ import {
   runIndependentForecastWriter,
   type AutoTradingMandateInput
 } from "../packages/auto-trader/src/index.js";
+import {
+  ingestUniverseMarkets,
+  loadDiscoveryPolicies,
+  normalizeUniverseMarketForStorage,
+  type EnrichmentProfile,
+  type UniverseMarket,
+  type UniverseSource
+} from "../packages/market-universe/src/index.js";
 import { loadRuntimeConfig } from "../packages/polymarket-core/src/index.js";
 import {
   openStateStore,
   type StateStore,
   type StoredAutoTradingDecisionRecord,
   type StoredAutoTradingSessionRecord,
+  type StoredUniverseMarketInput,
   type StoredPaperTradingExecutionReport
 } from "../packages/state-store/src/index.js";
 
@@ -28,12 +37,36 @@ export interface AutotraderDaemonOptions {
   schedulerSlackSeconds: number;
   limit: number;
   autoForecast: boolean;
+  autoRefreshUniverse?: boolean;
+  maxUniverseAgeMinutes?: number;
+  universeSource?: UniverseSource;
+  universePageSize?: number;
+  universeLimitPages?: number;
+  universeEnrichTopN?: number;
+  universeEnrichmentProfile?: EnrichmentProfile;
   stateDbPath: string;
   latestReportPath: string;
   observationLogPath: string;
   lockDir: string;
   staleLockSeconds: number;
   json: boolean;
+}
+
+export interface UniverseRefreshDecision {
+  shouldRefresh: boolean;
+  reason: "disabled" | "missing" | "fresh" | "stale" | "unparseable";
+  latestRunId?: string;
+  ageMinutes?: number;
+  maxAgeMinutes: number;
+}
+
+export interface UniverseRefreshResult extends UniverseRefreshDecision {
+  refreshed: boolean;
+  runId?: string;
+  totalMarkets?: number;
+  totalEvents?: number;
+  enrichedMarkets?: number;
+  pageCount?: number;
 }
 
 export interface AutotraderDaemonSessionStatus {
@@ -100,6 +133,13 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     schedulerSlackSeconds: envNumber("AUTOTRADER_SCHEDULER_SLACK_SECONDS", 30),
     limit: envNumber("AUTOTRADER_LIMIT", 10),
     autoForecast: envBoolean("AUTOTRADER_AUTO_FORECAST", true),
+    autoRefreshUniverse: envBoolean("AUTOTRADER_AUTO_REFRESH_UNIVERSE", true),
+    maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
+    universeSource: envString("AUTOTRADER_UNIVERSE_SOURCE") as UniverseSource | undefined,
+    universePageSize: envNumber("AUTOTRADER_UNIVERSE_PAGE_SIZE", 250),
+    universeLimitPages: envNumber("AUTOTRADER_UNIVERSE_LIMIT_PAGES", 1),
+    universeEnrichTopN: envNumber("AUTOTRADER_ENRICH_TOP_N", 250),
+    universeEnrichmentProfile: (envString("AUTOTRADER_ENRICHMENT_PROFILE", "microstructure") as EnrichmentProfile) ?? "microstructure",
     stateDbPath: envString("AUTOTRADER_STATE_DB_PATH", config.stateDbPath) ?? config.stateDbPath,
     latestReportPath: envString("AUTOTRADER_DAEMON_LATEST_REPORT_PATH", "state/autotrader-daemon-latest.json") ?? "state/autotrader-daemon-latest.json",
     observationLogPath: envString("AUTOTRADER_DAEMON_LOG_PATH", "state/autotrader-daemon.jsonl") ?? "state/autotrader-daemon.jsonl",
@@ -135,6 +175,28 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
       if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--no-auto-forecast") {
       options.autoForecast = false;
+    } else if (arg === "--no-auto-refresh-universe") {
+      options.autoRefreshUniverse = false;
+    } else if (arg === "--auto-refresh-universe") {
+      options.autoRefreshUniverse = true;
+    } else if (arg === "--max-universe-age-minutes" || arg.startsWith("--max-universe-age-minutes=")) {
+      options.maxUniverseAgeMinutes = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--universe-source" || arg.startsWith("--universe-source=")) {
+      options.universeSource = readArgValue(argv, index) as UniverseSource | undefined;
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--universe-page-size" || arg.startsWith("--universe-page-size=")) {
+      options.universePageSize = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--universe-limit-pages" || arg.startsWith("--universe-limit-pages=")) {
+      options.universeLimitPages = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--universe-enrich-top-n" || arg.startsWith("--universe-enrich-top-n=")) {
+      options.universeEnrichTopN = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--universe-enrichment-profile" || arg.startsWith("--universe-enrichment-profile=")) {
+      options.universeEnrichmentProfile = readArgValue(argv, index) as EnrichmentProfile | undefined;
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--state-db" || arg.startsWith("--state-db=")) {
       options.stateDbPath = readArgValue(argv, index) ?? options.stateDbPath;
       if (consumedNext(argv, index)) index += 1;
@@ -155,11 +217,115 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
   options.intervalSeconds = Math.max(5, Math.min(24 * 60 * 60, options.intervalSeconds));
   options.schedulerSlackSeconds = Math.max(0, Math.min(60 * 60, options.schedulerSlackSeconds));
   options.limit = Math.max(1, Math.min(100, options.limit));
+  options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes ?? 10)));
+  options.universePageSize = Math.max(25, Math.min(1_000, Number(options.universePageSize ?? 250)));
+  options.universeLimitPages = Math.max(1, Math.min(100, Number(options.universeLimitPages ?? 1)));
+  options.universeEnrichTopN = Math.max(0, Math.min(5_000, Number(options.universeEnrichTopN ?? 250)));
   return options;
 }
 
 function absolutePath(value: string): string {
   return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function numericValue(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function toStoredUniverseMarketInput(
+  runId: string,
+  market: UniverseMarket,
+  capturedAt: string
+): StoredUniverseMarketInput {
+  const normalized = normalizeUniverseMarketForStorage(market) as Record<string, unknown>;
+  return {
+    runId,
+    marketKey: String(normalized.marketKey ?? market.marketKey),
+    title: String(normalized.title ?? market.title),
+    marketId: firstString(normalized.marketId),
+    conditionId: firstString(normalized.conditionId),
+    questionId: firstString(normalized.questionId),
+    eventId: firstString(normalized.eventId),
+    eventSlug: firstString(normalized.eventSlug),
+    eventTitle: firstString(normalized.eventTitle),
+    seriesSlug: firstString(normalized.seriesSlug),
+    seriesTitle: firstString(normalized.seriesTitle),
+    slug: firstString(normalized.slug),
+    description: firstString(normalized.description),
+    resolutionSource: firstString(normalized.resolutionSource),
+    resolutionText: firstString(normalized.resolutionText),
+    category: firstString(normalized.category),
+    subcategory: firstString(normalized.subcategory),
+    tags: Array.isArray(normalized.tags) ? normalized.tags.map(String) : [],
+    outcomes: Array.isArray(normalized.outcomes) ? normalized.outcomes.map(String) : [],
+    outcomePrices: Array.isArray(normalized.outcomePrices) ? normalized.outcomePrices.map((value) => Number(value)) : [],
+    clobTokenIds: Array.isArray(normalized.clobTokenIds) ? normalized.clobTokenIds.map(String) : [],
+    yesTokenId: firstString(normalized.yesTokenId),
+    noTokenId: firstString(normalized.noTokenId),
+    active: typeof normalized.active === "boolean" ? normalized.active : undefined,
+    closed: typeof normalized.closed === "boolean" ? normalized.closed : undefined,
+    archived: typeof normalized.archived === "boolean" ? normalized.archived : undefined,
+    restricted: typeof normalized.restricted === "boolean" ? normalized.restricted : undefined,
+    acceptingOrders: typeof normalized.acceptingOrders === "boolean" ? normalized.acceptingOrders : undefined,
+    enableOrderBook: typeof normalized.enableOrderBook === "boolean" ? normalized.enableOrderBook : undefined,
+    startDate: firstString(normalized.startDate),
+    endDate: firstString(normalized.endDate),
+    createdAt: firstString(normalized.createdAt),
+    updatedAt: firstString(normalized.updatedAt),
+    liquidityUsd: numericValue(normalized.liquidityUsd),
+    liquidityClobUsd: numericValue(normalized.liquidityClobUsd),
+    volumeUsd: numericValue(normalized.volumeUsd),
+    volume24hUsd: numericValue(normalized.volume24hUsd),
+    volume7dUsd: numericValue(normalized.volume7dUsd),
+    volume30dUsd: numericValue(normalized.volume30dUsd),
+    impliedProb: numericValue(normalized.impliedProb),
+    lastTradePrice: numericValue(normalized.lastTradePrice),
+    bestBid: numericValue(normalized.bestBid),
+    bestAsk: numericValue(normalized.bestAsk),
+    midpoint: numericValue(normalized.midpoint),
+    spreadCents: numericValue(normalized.spreadCents),
+    orderPriceMinTickSize: numericValue(normalized.orderPriceMinTickSize),
+    orderMinSize: numericValue(normalized.orderMinSize),
+    negRisk: typeof normalized.negRisk === "boolean" ? normalized.negRisk : undefined,
+    depthUsdWithin2c: numericValue(normalized.depthUsdWithin2c),
+    depthUsdWithin5c: numericValue(normalized.depthUsdWithin5c),
+    slippageCentsAt50Usd: numericValue(normalized.slippageCentsAt50Usd),
+    slippageCentsAt250Usd: numericValue(normalized.slippageCentsAt250Usd),
+    structuralType: firstString(normalized.structuralType),
+    categoryGroup: firstString(normalized.categoryGroup),
+    horizonBucket: firstString(normalized.horizonBucket),
+    priceBucket: firstString(normalized.priceBucket),
+    liquidityBucket: firstString(normalized.liquidityBucket),
+    spreadBucket: firstString(normalized.spreadBucket),
+    opportunityMode: firstString(normalized.opportunityMode),
+    modelabilityScore: numericValue(normalized.modelabilityScore),
+    tradabilityScore: numericValue(normalized.tradabilityScore),
+    catalystScore: numericValue(normalized.catalystScore),
+    resolutionAmbiguityScore: numericValue(normalized.resolutionAmbiguityScore),
+    attentionGapScore: numericValue(normalized.attentionGapScore),
+    crossMarketScore: numericValue(normalized.crossMarketScore),
+    researchPriorityScore: numericValue(normalized.researchPriorityScore),
+    tradeOpportunityScore: numericValue(normalized.tradeOpportunityScore),
+    makerScore: numericValue(normalized.makerScore),
+    riskScore: numericValue(normalized.riskScore),
+    reasonCodes: Array.isArray(normalized.reasonCodes) ? normalized.reasonCodes.map(String) : [],
+    disqualifiers: Array.isArray(normalized.disqualifiers) ? normalized.disqualifiers.map(String) : [],
+    rawJson: {
+      rawGammaMarket: market.rawGammaMarket,
+      rawGammaEvent: market.rawGammaEvent
+    },
+    capturedAt
+  };
 }
 
 async function readJsonIfExists(filePath: string): Promise<Record<string, unknown> | undefined> {
@@ -344,6 +510,158 @@ function executionMaterialChanges(report: StoredPaperTradingExecutionReport): st
   return changes;
 }
 
+export function universeRefreshDecision(
+  latestRun: Record<string, unknown> | null | undefined,
+  options: Pick<AutotraderDaemonOptions, "autoRefreshUniverse" | "maxUniverseAgeMinutes">,
+  now = new Date()
+): UniverseRefreshDecision {
+  const maxAgeMinutes = Math.max(1, Number(options.maxUniverseAgeMinutes ?? 10));
+  if (options.autoRefreshUniverse === false) {
+    return {
+      shouldRefresh: false,
+      reason: "disabled",
+      latestRunId: typeof latestRun?.runId === "string" ? latestRun.runId : undefined,
+      maxAgeMinutes
+    };
+  }
+  if (!latestRun) {
+    return {
+      shouldRefresh: true,
+      reason: "missing",
+      maxAgeMinutes
+    };
+  }
+
+  const timestamp = typeof latestRun.completedAt === "string" && latestRun.completedAt
+    ? latestRun.completedAt
+    : latestRun.startedAt;
+  const parsed = typeof timestamp === "string" ? Date.parse(timestamp) : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    return {
+      shouldRefresh: true,
+      reason: "unparseable",
+      latestRunId: typeof latestRun.runId === "string" ? latestRun.runId : undefined,
+      maxAgeMinutes
+    };
+  }
+
+  const ageMinutes = Math.max(0, (now.getTime() - parsed) / 60_000);
+  const shouldRefresh = ageMinutes > maxAgeMinutes;
+  return {
+    shouldRefresh,
+    reason: shouldRefresh ? "stale" : "fresh",
+    latestRunId: typeof latestRun.runId === "string" ? latestRun.runId : undefined,
+    ageMinutes,
+    maxAgeMinutes
+  };
+}
+
+async function ensureFreshUniverse(
+  store: StateStore,
+  options: AutotraderDaemonOptions,
+  now: Date
+): Promise<UniverseRefreshResult> {
+  const decision = universeRefreshDecision(store.getLatestUniverseRun(), options, now);
+  if (!decision.shouldRefresh) {
+    return {
+      ...decision,
+      refreshed: false
+    };
+  }
+
+  const runtimeConfig = loadRuntimeConfig();
+  const policies = await loadDiscoveryPolicies(path.resolve(runtimeConfig.cwd, "configs/discovery-policies.yaml"));
+  const source = options.universeSource ?? policies.defaults.source;
+  const pageSize = Number(options.universePageSize ?? policies.defaults.pageSize);
+  const limitPages = Number(options.universeLimitPages ?? 1);
+  const enrichTopN = Number(options.universeEnrichTopN ?? Math.max(options.limit * 25, policies.defaults.enrichTopN));
+  const enrichmentProfile = options.universeEnrichmentProfile ?? policies.defaults.enrichmentProfile;
+  const startedAt = now.toISOString();
+  const runId = store.startUniverseRun({
+    startedAt,
+    source,
+    activeOnly: true,
+    closedIncluded: false,
+    status: "running",
+    metadata: {
+      trigger: "autotrader-daemon",
+      refreshReason: decision.reason,
+      previousRunId: decision.latestRunId,
+      previousAgeMinutes: decision.ageMinutes,
+      maxAgeMinutes: decision.maxAgeMinutes,
+      pageSize,
+      limitPages,
+      enrichTopN,
+      enrichmentProfile
+    }
+  });
+
+  try {
+    const result = await ingestUniverseMarkets(runtimeConfig, {
+      activeOnly: true,
+      includeClosed: false,
+      source,
+      pageSize,
+      limitPages,
+      enrichTopN,
+      enrichmentProfile,
+      now
+    }, policies);
+    const capturedAt = new Date().toISOString();
+    const stored = result.markets.map((market) => toStoredUniverseMarketInput(runId, market, capturedAt));
+    store.recordUniverseMarkets(runId, stored);
+    store.completeUniverseRun(runId, {
+      completedAt: capturedAt,
+      source: result.source,
+      activeOnly: true,
+      closedIncluded: false,
+      totalEvents: result.rawEvents.length,
+      totalMarkets: result.markets.length,
+      enrichedMarkets: result.enrichedCount,
+      status: "completed",
+      metadata: {
+        trigger: "autotrader-daemon",
+        refreshReason: decision.reason,
+        previousRunId: decision.latestRunId,
+        previousAgeMinutes: decision.ageMinutes,
+        maxAgeMinutes: decision.maxAgeMinutes,
+        pageSize,
+        limitPages,
+        enrichTopN,
+        enrichmentProfile,
+        rawMarkets: result.rawMarkets.length,
+        pageCount: result.pageCount
+      }
+    });
+    return {
+      ...decision,
+      refreshed: true,
+      runId,
+      totalMarkets: result.markets.length,
+      totalEvents: result.rawEvents.length,
+      enrichedMarkets: result.enrichedCount,
+      pageCount: result.pageCount
+    };
+  } catch (error) {
+    store.completeUniverseRun(runId, {
+      completedAt: new Date().toISOString(),
+      source,
+      activeOnly: true,
+      closedIncluded: false,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      metadata: {
+        trigger: "autotrader-daemon",
+        refreshReason: decision.reason,
+        previousRunId: decision.latestRunId,
+        previousAgeMinutes: decision.ageMinutes,
+        maxAgeMinutes: decision.maxAgeMinutes
+      }
+    });
+    throw error;
+  }
+}
+
 async function persistDaemonObservation(
   observation: Record<string, unknown>,
   options: AutotraderDaemonOptions
@@ -374,9 +692,12 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         continue;
       }
 
+      const universeRefresh = await ensureFreshUniverse(store, options, now);
+      const decisionNow = universeRefresh.refreshed ? new Date() : now;
       const mandate = normalizeAutoTradingMandate(session.mandate as unknown as AutoTradingMandateInput);
       const forecastWriter = options.autoForecast
         ? runIndependentForecastWriter(store, {
+          now: decisionNow,
           limit: Math.max(options.limit * 80, 1_000),
           minLiquidityUsdc: Math.max(0, mandate.minLiquidityUsdc * 0.5),
           maxSpreadCents: Math.max(mandate.maxSpreadCents, mandate.maxSpreadCents + 2)
@@ -384,7 +705,7 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         : undefined;
       const iteration = runAutoTradingIteration(store, {
         sessionId: session.sessionId,
-        now,
+        now: decisionNow,
         limit: options.limit
       });
       const compact = compactAutoTradingIterationResult(iteration);
@@ -402,6 +723,7 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         generatedAt: iteration.generatedAt,
         runId: iteration.runId,
         iterationId: iteration.iterationId,
+        universeRefresh,
         forecastWriter,
         summary: compact.summary,
         budgetUsdc: compact.summary.budgetUsdc,
@@ -492,6 +814,7 @@ function renderText(report: Record<string, unknown>): string {
   ];
   for (const observation of observations) {
     const summary = observation.summary as Record<string, unknown> | undefined;
+    const universeRefresh = observation.universeRefresh as Record<string, unknown> | undefined;
     lines.push(
       `- ${observation.sessionId}: ${observation.ran ? "ran" : `skipped ${observation.skipReason ?? ""}`}; ` +
       `$${Number(summary?.spentUsdc ?? 0).toFixed(4)} spent, ` +
@@ -501,7 +824,8 @@ function renderText(report: Record<string, unknown>): string {
       `${(observation.paperExecutionReport as Record<string, unknown> | undefined)?.orderCount ?? 0} paper orders, ` +
       `${Number((observation.paperExecutionReport as Record<string, unknown> | undefined)?.notionalFillRate ?? 0).toFixed(4)} fill rate, ` +
       `${observation.paperBuyProposalCount ?? 0} buy proposals, ` +
-      `${observation.paperExitProposalCount ?? 0} exit proposals`
+      `${observation.paperExitProposalCount ?? 0} exit proposals, ` +
+      `universe ${universeRefresh?.refreshed ? "refreshed" : `kept ${universeRefresh?.reason ?? "unknown"}`}`
     );
   }
   return lines.join("\n");
