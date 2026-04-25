@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+import { schedulerDecision } from "./autotrader-scheduler.mjs";
+
 const REQUIRED_TOOLS = [
   "ingest_market_universe",
   "start_auto_trading_session",
@@ -274,46 +276,6 @@ function summarizeExecutor(output) {
 
 function absolutePath(value) {
   return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
-}
-
-export function schedulerDecision(previousObservation, options, now = new Date()) {
-  const nextRunAt = previousObservation?.nextRunAt ?? previousObservation?.summary?.nextRunAt;
-  const dueAtMs = typeof nextRunAt === "string" ? Date.parse(nextRunAt) : Number.NaN;
-  const nowMs = now.getTime();
-  const slackMs = Math.max(0, Number(options.schedulerSlackSeconds ?? 0)) * 1000;
-  if (!options.respectNextRunAt) {
-    return {
-      skipped: false,
-      reason: "forced",
-      respectNextRunAt: false,
-      previousNextRunAt: typeof nextRunAt === "string" ? nextRunAt : undefined
-    };
-  }
-  if (!Number.isFinite(dueAtMs)) {
-    return {
-      skipped: false,
-      reason: "missing_next_run_at",
-      respectNextRunAt: true,
-      previousNextRunAt: typeof nextRunAt === "string" ? nextRunAt : undefined
-    };
-  }
-  const dueInSeconds = Math.ceil((dueAtMs - nowMs) / 1000);
-  if (dueAtMs - slackMs > nowMs) {
-    return {
-      skipped: true,
-      reason: "not_due",
-      respectNextRunAt: true,
-      previousNextRunAt: nextRunAt,
-      dueInSeconds
-    };
-  }
-  return {
-    skipped: false,
-    reason: "due",
-    respectNextRunAt: true,
-    previousNextRunAt: nextRunAt,
-    dueInSeconds
-  };
 }
 
 async function readJsonIfExists(filePath) {

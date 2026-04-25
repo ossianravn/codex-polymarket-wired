@@ -2,6 +2,8 @@ import process from "node:process";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
 
+import { dueStatus } from "./autotrader-scheduler.mjs";
+
 function envString(name, fallback) {
   const value = process.env[name];
   return value === undefined || value.trim() === "" ? fallback : value;
@@ -29,6 +31,9 @@ function parseArgs(argv = process.argv.slice(2)) {
     latestReportPath: envString("AUTOTRADER_LATEST_REPORT_PATH", "state/autotrader-heartbeat-latest.json"),
     observationLogPath: envString("AUTOTRADER_OBSERVATION_LOG_PATH", "state/autotrader-heartbeat.jsonl"),
     historyLimit: envNumber("AUTOTRADER_STATUS_HISTORY_LIMIT", 5),
+    dueStatus: envBoolean("AUTOTRADER_DUE_STATUS", false),
+    respectNextRunAt: envBoolean("AUTOTRADER_RESPECT_NEXT_RUN_AT", true),
+    schedulerSlackSeconds: envNumber("AUTOTRADER_SCHEDULER_SLACK_SECONDS", 30),
     json: envBoolean("AUTOTRADER_STATUS_JSON", false)
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -49,6 +54,17 @@ function parseArgs(argv = process.argv.slice(2)) {
       index += 1;
     } else if (arg.startsWith("--history-limit=")) {
       options.historyLimit = Number(arg.split("=")[1]);
+    } else if (arg === "--due-status") {
+      options.dueStatus = true;
+    } else if (arg === "--ignore-next-run-at" || arg === "--force") {
+      options.respectNextRunAt = false;
+    } else if (arg === "--respect-next-run-at") {
+      options.respectNextRunAt = true;
+    } else if (arg === "--scheduler-slack-seconds") {
+      options.schedulerSlackSeconds = Number(next);
+      index += 1;
+    } else if (arg.startsWith("--scheduler-slack-seconds=")) {
+      options.schedulerSlackSeconds = Number(arg.split("=")[1]);
     } else if (arg === "--json") {
       options.json = true;
     }
@@ -115,11 +131,39 @@ function renderText(status) {
   ].join("\n");
 }
 
+function renderDueStatusText(report) {
+  if (!report.ok) {
+    return [
+      "Autotrader due status: no observation found.",
+      "Decision: run_heartbeat"
+    ].join("\n");
+  }
+  const dueSuffix = report.scheduler.dueInSeconds === undefined ? "" : ` (${report.scheduler.dueInSeconds}s)`;
+  return [
+    `Autotrader due status: ${report.automationDecision}`,
+    `Session: ${report.sessionId ?? "unknown"}`,
+    `Due: ${report.due ? "yes" : "no"}${dueSuffix}`,
+    `Next run: ${report.nextRunAt ?? "unknown"}`,
+    `Notify: ${report.shouldNotify ? "yes" : "no"}`,
+    `Material paper changes: ${report.materialPaperChanges.length ? report.materialPaperChanges.join(", ") : "none"}`,
+    `Safety issue: ${report.safetyIssue ? "yes" : "no"}`
+  ].join("\n");
+}
+
 async function main() {
   const options = parseArgs();
   const latestReportPath = absolutePath(options.latestReportPath);
   const observationLogPath = absolutePath(options.observationLogPath);
   const latest = await readJsonIfExists(latestReportPath);
+  if (options.dueStatus) {
+    const report = dueStatus(latest, options);
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(renderDueStatusText(report));
+    }
+    return;
+  }
   const history = await readJsonlTail(observationLogPath, options.historyLimit);
   const status = {
     ok: Boolean(latest),

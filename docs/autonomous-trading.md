@@ -130,6 +130,8 @@ By default, the heartbeat runner respects the prior observation's `nextRunAt`. T
 
 Use `npm run autotrader:status` when an automation only needs to report the latest observation. It reads the latest snapshot and JSONL history without touching Polymarket APIs or creating previews. Use `npm run autotrader:status:json` or `AUTOTRADER_STATUS_JSON=true` for machine-readable output.
 
+Use `npm run autotrader:due-status` for a lightweight automation gate. It reads only the latest heartbeat snapshot, returns `automationDecision` as `quiet`, `run_heartbeat`, `notify_material_change`, or `notify_safety_issue`, and never connects to the MCP server. Use `npm run autotrader:due-status:json` for machine-readable automation routing.
+
 ## MCP tools
 
 - `start_auto_trading_session`
