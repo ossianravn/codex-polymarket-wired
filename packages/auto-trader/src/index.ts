@@ -26,6 +26,7 @@ export interface AutoTradingMandateInput {
   riskProfile: AutoTradingRiskProfile;
   mode?: AutoTradingMode;
   maxSingleOrderUsdc?: number;
+  minOrderUsdc?: number;
   maxOpenPositions?: number;
   maxEventPositions?: number;
   maxEventExposureUsdc?: number;
@@ -182,6 +183,7 @@ export interface CompactAutoTradingIterationResult {
     | "budgetUsdc"
     | "timeframeHours"
     | "maxSingleOrderUsdc"
+    | "minOrderUsdc"
     | "maxOpenPositions"
     | "maxEventPositions"
     | "maxEventExposureUsdc"
@@ -297,6 +299,7 @@ interface RiskDefaults {
   minMarketHoursToEnd: number;
   minLiquidityUsdc: number;
   maxSpreadCents: number;
+  minOrderUsdc: number;
   minTradabilityScore: number;
   minResearchPriorityScore: number;
   maxResolutionAmbiguityScore: number;
@@ -319,6 +322,7 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     minMarketHoursToEnd: 6,
     minLiquidityUsdc: 10_000,
     maxSpreadCents: 3,
+    minOrderUsdc: 1,
     minTradabilityScore: 70,
     minResearchPriorityScore: 70,
     maxResolutionAmbiguityScore: 30,
@@ -339,6 +343,7 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     minMarketHoursToEnd: 2,
     minLiquidityUsdc: 5_000,
     maxSpreadCents: 5,
+    minOrderUsdc: 1,
     minTradabilityScore: 58,
     minResearchPriorityScore: 58,
     maxResolutionAmbiguityScore: 45,
@@ -359,6 +364,7 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     minMarketHoursToEnd: 0.05,
     minLiquidityUsdc: 1_000,
     maxSpreadCents: 8,
+    minOrderUsdc: 1,
     minTradabilityScore: 42,
     minResearchPriorityScore: 48,
     maxResolutionAmbiguityScore: 60,
@@ -505,6 +511,7 @@ export function normalizeAutoTradingMandate(input: AutoTradingMandateInput): Aut
     1,
     Math.min(budgetUsdc, input.maxSingleOrderUsdc ?? budgetUsdc * defaults.maxSingleOrderBudgetFraction)
   );
+  const minOrderUsdc = Math.max(0.01, Math.min(maxSingleOrderUsdc, input.minOrderUsdc ?? defaults.minOrderUsdc));
   return {
     name: input.name,
     budgetUsdc,
@@ -512,6 +519,7 @@ export function normalizeAutoTradingMandate(input: AutoTradingMandateInput): Aut
     riskProfile: input.riskProfile,
     mode: input.mode ?? "paper",
     maxSingleOrderUsdc,
+    minOrderUsdc,
     maxOpenPositions: Math.max(1, Math.min(50, input.maxOpenPositions ?? defaults.maxOpenPositions)),
     maxEventPositions: Math.max(1, Math.min(10, input.maxEventPositions ?? defaults.maxEventPositions)),
     maxEventExposureUsdc: Math.max(
@@ -991,6 +999,7 @@ function createSession(store: StateStore, mandate: AutoTradingMandate, now: Date
     mandate: { ...mandate },
     constraints: {
       maxSingleOrderUsdc: mandate.maxSingleOrderUsdc,
+      minOrderUsdc: mandate.minOrderUsdc,
       maxOpenPositions: mandate.maxOpenPositions,
       maxEventPositions: mandate.maxEventPositions,
       maxEventExposureUsdc: mandate.maxEventExposureUsdc,
@@ -1082,6 +1091,7 @@ export function compactAutoTradingIterationResult(
       budgetUsdc: result.mandate.budgetUsdc,
       timeframeHours: result.mandate.timeframeHours,
       maxSingleOrderUsdc: result.mandate.maxSingleOrderUsdc,
+      minOrderUsdc: result.mandate.minOrderUsdc,
       maxOpenPositions: result.mandate.maxOpenPositions,
       maxEventPositions: result.mandate.maxEventPositions,
       maxEventExposureUsdc: result.mandate.maxEventExposureUsdc,
@@ -1322,11 +1332,16 @@ export function runAutoTradingIteration(
           status = "proposed";
           const remainingEventBudget = Math.max(0, mandate.maxEventExposureUsdc - (eventExposureUsdc.get(eventKey) ?? 0));
           allocatedBudgetUsdc = Math.min(mandate.maxSingleOrderUsdc, remainingBudget, remainingEventBudget);
-          if (allocatedBudgetUsdc <= 0) {
+          if (remainingBudget < mandate.minOrderUsdc) {
             action = "monitor";
             status = "watch";
             allocatedBudgetUsdc = undefined;
-            blockers.push("event_exposure_cap_reached");
+            blockers.push("remaining_budget_below_min_order");
+          } else if (allocatedBudgetUsdc < mandate.minOrderUsdc) {
+            action = "monitor";
+            status = "watch";
+            allocatedBudgetUsdc = undefined;
+            blockers.push(remainingEventBudget < mandate.minOrderUsdc ? "event_exposure_cap_reached" : "allocation_below_min_order");
           } else {
             shares = Number((allocatedBudgetUsdc / Math.max(0.001, targetPrice)).toFixed(4));
             remainingBudget = Math.max(0, remainingBudget - allocatedBudgetUsdc);

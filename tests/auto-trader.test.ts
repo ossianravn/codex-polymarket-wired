@@ -577,6 +577,92 @@ test("auto-trader allocates limited budget by final decision score, not raw univ
   });
 });
 
+test("auto-trader leaves sub-minimum leftover budget idle instead of creating dust paper orders", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    const market = (input: { key: string; eventSlug: string; tradeScore: number }) => ({
+      runId,
+      marketKey: input.key,
+      conditionId: input.key.replace("condition:", ""),
+      slug: input.key.replace("condition:", ""),
+      eventSlug: input.eventSlug,
+      eventTitle: input.eventSlug,
+      title: input.key,
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.5, 0.5],
+      clobTokenIds: [`${input.key}:yes`, `${input.key}:no`],
+      yesTokenId: `${input.key}:yes`,
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 10_000,
+      impliedProb: 0.5,
+      bestBid: 0.49,
+      bestAsk: 0.51,
+      midpoint: 0.5,
+      spreadCents: 2,
+      categoryGroup: "crypto",
+      structuralType: "threshold-range",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 50,
+      crossMarketScore: 20,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: input.tradeScore,
+      makerScore: 50,
+      riskScore: 10,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {}
+    });
+    store.recordUniverseMarkets(runId, [
+      market({ key: "condition:first-full-order", eventSlug: "first-event", tradeScore: 95 }),
+      market({ key: "condition:dust-leftover", eventSlug: "second-event", tradeScore: 90 })
+    ]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 5.5,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5,
+        maxEventExposureUsdc: 5,
+        minOrderUsdc: 1
+      }
+    });
+
+    const proposed = result.candidates.filter((candidate) => candidate.action === "paper_buy_yes");
+    assert.equal(proposed.length, 1);
+    assert.equal(proposed[0]?.marketKey, "condition:first-full-order");
+    assert.equal(result.summary.proposedBudgetUsdc, 5);
+    assert.equal(result.summary.remainingBudgetUsdc, 0.5);
+    assert.equal(result.candidates.find((candidate) => candidate.marketKey === "condition:dust-leftover")?.blockers.includes("remaining_budget_below_min_order"), true);
+  });
+});
+
 test("auto-trader rotates paper budget by exiting weak positions for stronger candidates", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");
