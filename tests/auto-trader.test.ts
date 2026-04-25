@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   buildAutoTradingExecutionGate,
   compactAutoTradingIterationResult,
+  evaluateUniverseFreshness,
   runIndependentForecastWriter,
   runResearchRequestWorker,
   runAutoTradingIteration
@@ -54,6 +55,45 @@ function independentForecastRawJson(
     }
   };
 }
+
+test("universe freshness evaluator classifies missing, fresh, stale, and unparseable runs", () => {
+  const now = new Date("2026-04-25T12:00:00.000Z");
+
+  assert.deepEqual(evaluateUniverseFreshness(null, { maxAgeMinutes: 10 }, now), {
+    isFresh: false,
+    reason: "missing",
+    maxAgeMinutes: 10
+  });
+
+  const fresh = evaluateUniverseFreshness(
+    { runId: "run-fresh", completedAt: "2026-04-25T11:55:00.000Z" },
+    { maxAgeMinutes: 10 },
+    now
+  );
+  assert.equal(fresh.isFresh, true);
+  assert.equal(fresh.reason, "fresh");
+  assert.equal(fresh.latestRunId, "run-fresh");
+  assert.equal(fresh.ageMinutes, 5);
+
+  const stale = evaluateUniverseFreshness(
+    { runId: "run-stale", completedAt: "2026-04-25T11:40:00.000Z" },
+    { maxAgeMinutes: 10 },
+    now
+  );
+  assert.equal(stale.isFresh, false);
+  assert.equal(stale.reason, "stale");
+  assert.equal(stale.latestRunId, "run-stale");
+  assert.equal(stale.ageMinutes, 20);
+
+  const unparseable = evaluateUniverseFreshness(
+    { runId: "run-bad", completedAt: "not-a-date" },
+    { maxAgeMinutes: 10 },
+    now
+  );
+  assert.equal(unparseable.isFresh, false);
+  assert.equal(unparseable.reason, "unparseable");
+  assert.equal(unparseable.latestRunId, "run-bad");
+});
 
 test("auto-trader creates paper session and filters markets by mandate timeframe", async () => {
   await withTempStore((store) => {

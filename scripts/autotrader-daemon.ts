@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   compactAutoTradingIterationResult,
+  evaluateUniverseFreshness,
   normalizeAutoTradingMandate,
   runAutoTradingIteration,
   runIndependentForecastWriter,
@@ -524,36 +525,19 @@ export function universeRefreshDecision(
       maxAgeMinutes
     };
   }
-  if (!latestRun) {
-    return {
-      shouldRefresh: true,
-      reason: "missing",
-      maxAgeMinutes
-    };
-  }
-
-  const timestamp = typeof latestRun.completedAt === "string" && latestRun.completedAt
-    ? latestRun.completedAt
-    : latestRun.startedAt;
-  const parsed = typeof timestamp === "string" ? Date.parse(timestamp) : Number.NaN;
-  if (!Number.isFinite(parsed)) {
-    return {
-      shouldRefresh: true,
-      reason: "unparseable",
-      latestRunId: typeof latestRun.runId === "string" ? latestRun.runId : undefined,
-      maxAgeMinutes
-    };
-  }
-
-  const ageMinutes = Math.max(0, (now.getTime() - parsed) / 60_000);
-  const shouldRefresh = ageMinutes > maxAgeMinutes;
-  return {
-    shouldRefresh,
-    reason: shouldRefresh ? "stale" : "fresh",
-    latestRunId: typeof latestRun.runId === "string" ? latestRun.runId : undefined,
-    ageMinutes,
-    maxAgeMinutes
+  const freshness = evaluateUniverseFreshness(latestRun, { maxAgeMinutes }, now);
+  const decision: UniverseRefreshDecision = {
+    shouldRefresh: !freshness.isFresh,
+    reason: freshness.reason,
+    maxAgeMinutes: freshness.maxAgeMinutes
   };
+  if (freshness.latestRunId !== undefined) {
+    decision.latestRunId = freshness.latestRunId;
+  }
+  if (freshness.ageMinutes !== undefined) {
+    decision.ageMinutes = freshness.ageMinutes;
+  }
+  return decision;
 }
 
 async function ensureFreshUniverse(

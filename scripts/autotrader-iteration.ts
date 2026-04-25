@@ -2,6 +2,7 @@ import process from "node:process";
 
 import {
   compactAutoTradingIterationResult,
+  evaluateUniverseFreshness,
   normalizeAutoTradingMandate,
   runIndependentForecastWriter,
   runAutoTradingIteration,
@@ -20,14 +21,35 @@ interface CliOptions {
   mode?: "paper" | "live_guarded" | "live_autonomous";
   limit: number;
   autoForecast: boolean;
+  maxUniverseAgeMinutes: number;
+  allowStaleUniverse: boolean;
   json: boolean;
   compact: boolean;
+}
+
+function envNumber(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function envBoolean(name: string, fallback: boolean): boolean {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
 function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
   const options: CliOptions = {
     limit: 25,
     autoForecast: true,
+    maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
+    allowStaleUniverse: envBoolean("AUTOTRADER_ALLOW_STALE_UNIVERSE", false),
     json: false,
     compact: false
   };
@@ -71,12 +93,22 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
       options.limit = Number(arg.split("=")[1]);
     } else if (arg === "--no-auto-forecast") {
       options.autoForecast = false;
+    } else if (arg === "--max-universe-age-minutes") {
+      options.maxUniverseAgeMinutes = Number(next);
+      index += 1;
+    } else if (arg.startsWith("--max-universe-age-minutes=")) {
+      options.maxUniverseAgeMinutes = Number(arg.split("=")[1]);
+    } else if (arg === "--allow-stale-universe") {
+      options.allowStaleUniverse = true;
+    } else if (arg === "--fail-on-stale-universe") {
+      options.allowStaleUniverse = false;
     } else if (arg === "--json") {
       options.json = true;
     } else if (arg === "--compact") {
       options.compact = true;
     }
   }
+  options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes)));
   return options;
 }
 
@@ -108,6 +140,34 @@ async function main(): Promise<void> {
   }
   const config = loadRuntimeConfig();
   const store = openStateStore(config.stateDbPath);
+  const universeFreshness = evaluateUniverseFreshness(
+    store.getLatestUniverseRun(),
+    { maxAgeMinutes: options.maxUniverseAgeMinutes }
+  );
+  if (!universeFreshness.isFresh && !options.allowStaleUniverse) {
+    const output = {
+      status: "blocked",
+      blocker: "stale_universe_run",
+      universeFreshness,
+      message: `Auto-trader iteration blocked because universe discovery is ${universeFreshness.reason}. Refresh discovery or pass --allow-stale-universe for development-only runs.`
+    };
+    store.recordAutomationRun({
+      automationName: "autotrader-iteration",
+      status: "blocked",
+      projectMode: "local",
+      findingsCount: 0,
+      summary: `blocked: universe discovery ${universeFreshness.reason}`,
+      output
+    });
+    store.close();
+    if (options.json) {
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      console.log(output.message);
+    }
+    process.exitCode = 2;
+    return;
+  }
   const existingSession = options.sessionId ? store.getAutoTradingSession(options.sessionId) : undefined;
   const mandateInput = existingSession
     ? existingSession.mandate as unknown as AutoTradingMandateInput
@@ -138,6 +198,7 @@ async function main(): Promise<void> {
     findingsCount: result.candidates.length,
     summary: `auto-trader proposed ${result.summary.proposedOrders} paper orders; next run ${result.summary.nextRunAt ?? "unknown"}`,
     output: {
+      universeFreshness,
       forecastWriter,
       iteration: result
     } as unknown as Record<string, unknown>
@@ -145,6 +206,7 @@ async function main(): Promise<void> {
   store.close();
   if (options.json) {
     const output = {
+      universeFreshness,
       forecastWriter,
       ...(options.compact ? compactAutoTradingIterationResult(result) : result)
     };
@@ -154,6 +216,7 @@ async function main(): Promise<void> {
       forecastWriter
         ? `Forecast writer: ${forecastWriter.written} written, ${forecastWriter.skippedExisting} existing, ${forecastWriter.skippedIneligible} ineligible`
         : "Forecast writer: skipped",
+      `Universe freshness: ${universeFreshness.reason}${universeFreshness.ageMinutes === undefined ? "" : ` (${universeFreshness.ageMinutes.toFixed(1)}m old / ${universeFreshness.maxAgeMinutes}m max)`}`,
       renderSummary(result)
     ].join("\n"));
   }

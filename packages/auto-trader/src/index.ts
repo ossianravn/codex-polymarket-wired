@@ -175,6 +175,17 @@ export interface AutoTradingIterationResult {
   researchRequests: AutoTradingResearchRequest[];
 }
 
+export type AutoTradingUniverseFreshnessReason = "missing" | "fresh" | "stale" | "unparseable";
+
+export interface AutoTradingUniverseFreshness {
+  isFresh: boolean;
+  reason: AutoTradingUniverseFreshnessReason;
+  latestRunId?: string;
+  timestamp?: string;
+  ageMinutes?: number;
+  maxAgeMinutes: number;
+}
+
 export interface AutoTradingExecutionPreviewRequest {
   sessionId: string;
   decisionId: string;
@@ -2029,6 +2040,48 @@ export function buildAutoTradingExecutionGate(
     requiresApproval: canPreview && mode === "live_guarded",
     blockers: uniqueBlockers,
     previewRequest
+  };
+}
+
+export function evaluateUniverseFreshness(
+  latestRun: Record<string, unknown> | null | undefined,
+  options: { maxAgeMinutes?: number } = {},
+  now = new Date()
+): AutoTradingUniverseFreshness {
+  const maxAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxAgeMinutes ?? 10)));
+  if (!latestRun) {
+    return {
+      isFresh: false,
+      reason: "missing",
+      maxAgeMinutes
+    };
+  }
+
+  const timestamp = typeof latestRun.completedAt === "string" && latestRun.completedAt
+    ? latestRun.completedAt
+    : typeof latestRun.startedAt === "string"
+      ? latestRun.startedAt
+      : undefined;
+  const latestRunId = typeof latestRun.runId === "string" ? latestRun.runId : undefined;
+  const parsed = typeof timestamp === "string" ? Date.parse(timestamp) : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    return {
+      isFresh: false,
+      reason: "unparseable",
+      latestRunId,
+      maxAgeMinutes
+    };
+  }
+
+  const ageMinutes = Math.max(0, (now.getTime() - parsed) / 60_000);
+  const isFresh = ageMinutes <= maxAgeMinutes;
+  return {
+    isFresh,
+    reason: isFresh ? "fresh" : "stale",
+    latestRunId,
+    timestamp,
+    ageMinutes,
+    maxAgeMinutes
   };
 }
 
