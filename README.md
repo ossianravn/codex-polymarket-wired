@@ -138,6 +138,8 @@ Use `execute_auto_trading_decision` to apply that mode behavior to a stored deci
 
 Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It supports `dry_run` for eligibility checks and `auto_submit=false` for autonomous sessions that should create previews without submitting.
 
+Use `npm run smoke:autotrader-mcp` to run a no-submit MCP smoke: seed an ending-soon universe, start a tiny `live_guarded` session, dry-run executor eligibility, create one guarded preview, and assert that zero orders were submitted.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:

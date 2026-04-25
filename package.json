@@ -15,6 +15,7 @@
     "test": "node --import tsx --test ./tests/**/*.test.ts",
     "setup:python-helper": "python3 -m pip install -r ./servers/polymarket-mcp/helpers/requirements.txt",
     "smoke:mcp": "tsx ./scripts/smoke-mcp.ts",
+    "smoke:autotrader-mcp": "node ./scripts/autotrader-mcp-smoke.mjs",
     "dev:watcher": "tsx ./services/watcher-daemon/src/index.ts",
     "watcher:once": "tsx ./services/watcher-daemon/src/index.ts --once",
     "dev:executor": "tsx ./services/executor-daemon/src/index.ts",

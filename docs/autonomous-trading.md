@@ -118,6 +118,8 @@ Each execution attempt updates the decision payload with `execution` and `execut
 
 Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It ignores paper sessions and already-executed decisions, supports `dry_run`, stops at `awaiting_approval` for `live_guarded`, and can submit in `live_autonomous` only after the same checks used by `execute_auto_trading_decision`.
 
+Use `npm run smoke:autotrader-mcp` for an end-to-end no-submit MCP smoke. It starts the server with `POLYMARKET_ENABLE_TRADING=false`, seeds a small composite universe, creates a 24-hour aggressive `live_guarded` session, runs the executor in `dry_run`, then creates one guarded preview with `auto_submit=false` and asserts no order was submitted.
+
 ## MCP tools
 
 - `start_auto_trading_session`
