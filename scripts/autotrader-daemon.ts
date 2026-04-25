@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  applyAutoTradingAgentDecisionPlan,
+  buildAutoTradingAgentBrief,
   compactAutoTradingIterationResult,
   evaluateUniverseFreshness,
   normalizeAutoTradingMandate,
@@ -11,6 +13,7 @@ import {
   runAutoTradingIteration,
   runIndependentForecastWriter,
   runResearchEvidencePipeline,
+  type AutoTradingAgentDecisionPlan,
   type AutoTradingSnapshotRefreshResult,
   type AutoTradingMandateInput,
   type ResearchSourcePack
@@ -42,6 +45,11 @@ export interface AutotraderDaemonOptions {
   schedulerSlackSeconds: number;
   limit: number;
   autoForecast: boolean;
+  agentLoop?: boolean;
+  agentCandidateLimit?: number;
+  agentPlanFile?: string;
+  agentBriefPath?: string;
+  agentPromptPath?: string;
   autoRefreshUniverse?: boolean;
   autoRefreshSnapshots?: boolean;
   refreshSnapshotLimit?: number;
@@ -142,6 +150,11 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     schedulerSlackSeconds: envNumber("AUTOTRADER_SCHEDULER_SLACK_SECONDS", 30),
     limit: envNumber("AUTOTRADER_LIMIT", 10),
     autoForecast: envBoolean("AUTOTRADER_AUTO_FORECAST", true),
+    agentLoop: envBoolean("AUTOTRADER_AGENT_LOOP", false),
+    agentCandidateLimit: envNumber("AUTOTRADER_AGENT_CANDIDATE_LIMIT", 12),
+    agentPlanFile: envString("AUTOTRADER_AGENT_PLAN_FILE"),
+    agentBriefPath: envString("AUTOTRADER_AGENT_BRIEF_OUT"),
+    agentPromptPath: envString("AUTOTRADER_AGENT_PROMPT_OUT"),
     autoRefreshUniverse: envBoolean("AUTOTRADER_AUTO_REFRESH_UNIVERSE", true),
     autoRefreshSnapshots: envBoolean("AUTOTRADER_REFRESH_SNAPSHOTS", true),
     refreshSnapshotLimit: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_LIMIT", 50),
@@ -188,6 +201,22 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
       if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--no-auto-forecast") {
       options.autoForecast = false;
+    } else if (arg === "--agent-loop") {
+      options.agentLoop = true;
+    } else if (arg === "--no-agent-loop") {
+      options.agentLoop = false;
+    } else if (arg === "--agent-candidate-limit" || arg.startsWith("--agent-candidate-limit=")) {
+      options.agentCandidateLimit = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--agent-plan-file" || arg.startsWith("--agent-plan-file=")) {
+      options.agentPlanFile = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--agent-brief-out" || arg.startsWith("--agent-brief-out=")) {
+      options.agentBriefPath = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--agent-prompt-out" || arg.startsWith("--agent-prompt-out=")) {
+      options.agentPromptPath = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--no-auto-refresh-universe") {
       options.autoRefreshUniverse = false;
     } else if (arg === "--auto-refresh-universe") {
@@ -243,6 +272,7 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
   options.intervalSeconds = Math.max(5, Math.min(24 * 60 * 60, options.intervalSeconds));
   options.schedulerSlackSeconds = Math.max(0, Math.min(60 * 60, options.schedulerSlackSeconds));
   options.limit = Math.max(1, Math.min(100, options.limit));
+  options.agentCandidateLimit = Math.max(1, Math.min(50, Number(options.agentCandidateLimit ?? 12)));
   options.refreshSnapshotLimit = Math.max(1, Math.min(250, Number(options.refreshSnapshotLimit ?? 50)));
   options.refreshSnapshotMaxAgeMinutes = Math.max(0, Math.min(24 * 60, Number(options.refreshSnapshotMaxAgeMinutes ?? 5)));
   options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes ?? 10)));
@@ -270,6 +300,13 @@ async function loadResearchSourcePacks(filePath: string | undefined): Promise<Re
     return undefined;
   }
   return sourcePacksFromJson(JSON.parse(await readFile(absolutePath(filePath), "utf8")) as unknown);
+}
+
+async function loadAgentDecisionPlan(filePath: string | undefined): Promise<AutoTradingAgentDecisionPlan | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  return JSON.parse(await readFile(absolutePath(filePath), "utf8")) as AutoTradingAgentDecisionPlan;
 }
 
 async function refreshSnapshotsForSession(
@@ -774,12 +811,31 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
       const iteration = runAutoTradingIteration(store, {
         sessionId: session.sessionId,
         now: decisionNow,
-        limit: options.limit
+        limit: options.limit,
+        persist: !options.agentLoop
       });
+      const agentBrief = options.agentLoop
+        ? buildAutoTradingAgentBrief({
+          iteration,
+          candidateLimit: options.agentCandidateLimit
+        })
+        : undefined;
+      if (agentBrief && options.agentBriefPath) {
+        await mkdir(path.dirname(absolutePath(options.agentBriefPath)), { recursive: true });
+        await writeFile(absolutePath(options.agentBriefPath), `${JSON.stringify(agentBrief, null, 2)}\n`, "utf8");
+      }
+      if (agentBrief?.prompt && options.agentPromptPath) {
+        await mkdir(path.dirname(absolutePath(options.agentPromptPath)), { recursive: true });
+        await writeFile(absolutePath(options.agentPromptPath), `${agentBrief.prompt}\n`, "utf8");
+      }
+      const agentPlan = options.agentLoop ? await loadAgentDecisionPlan(options.agentPlanFile) : undefined;
+      const agentApplyResult = agentBrief && agentPlan
+        ? applyAutoTradingAgentDecisionPlan(store, agentBrief, agentPlan, { now: decisionNow })
+        : undefined;
       const compact = compactAutoTradingIterationResult(iteration);
       const paperBuys = proposalDetails(iteration.candidates, "paper_buy_yes");
       const paperExits = proposalDetails(iteration.candidates, "paper_sell_yes");
-      const ledger = store.getPaperTradingLedger(session.sessionId);
+      const ledger = agentApplyResult?.ledger ?? store.getPaperTradingLedger(session.sessionId);
       const paperExecutionReport = store.getPaperTradingExecutionReport({
         sessionId: session.sessionId,
         limit: 20
@@ -795,15 +851,46 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         snapshotRefresh,
         researchPipeline,
         forecastWriter,
+        agentLoop: options.agentLoop
+          ? {
+            enabled: true,
+            briefPath: options.agentBriefPath,
+            promptPath: options.agentPromptPath,
+            planFile: options.agentPlanFile,
+            candidateCount: agentBrief?.candidates.length ?? 0,
+            planProvided: Boolean(agentPlan),
+            applied: agentApplyResult
+              ? {
+                recorded: agentApplyResult.recorded,
+                blocked: agentApplyResult.blocked,
+                liveSubmissionBlocked: agentApplyResult.liveSubmissionBlocked,
+                decisions: agentApplyResult.decisions.map((decision) => ({
+                  status: decision.status,
+                  action: decision.input.action,
+                  marketKey: decision.storedDecision?.marketKey ?? decision.input.marketKey,
+                  title: decision.storedDecision?.title,
+                  blockers: decision.blockers,
+                  paperOrder: decision.paperOrder
+                    ? {
+                      status: decision.paperOrder.status,
+                      requestedNotionalUsdc: decision.paperOrder.requestedNotionalUsdc,
+                      filledNotionalUsdc: decision.paperOrder.filledNotionalUsdc
+                    }
+                    : undefined
+                }))
+              }
+              : undefined
+          }
+          : { enabled: false },
         summary: compact.summary,
-        budgetUsdc: compact.summary.budgetUsdc,
-        spentUsdc: compact.summary.spentUsdc,
-        remainingBudgetUsdc: compact.summary.remainingBudgetUsdc,
-        positionValueUsdc: compact.summary.positionValueUsdc,
-        unrealizedPnlUsdc: compact.summary.unrealizedPnlUsdc,
-        realizedPnlUsdc: compact.summary.realizedPnlUsdc,
-        totalPnlUsdc: compact.summary.totalPnlUsdc,
-        portfolioValueUsdc: compact.summary.portfolioValueUsdc,
+        budgetUsdc: ledger.summary.budgetUsdc,
+        spentUsdc: ledger.summary.spentUsdc,
+        remainingBudgetUsdc: ledger.summary.remainingBudgetUsdc,
+        positionValueUsdc: ledger.summary.positionValueUsdc,
+        unrealizedPnlUsdc: ledger.summary.unrealizedPnlUsdc,
+        realizedPnlUsdc: ledger.summary.realizedPnlUsdc,
+        totalPnlUsdc: ledger.summary.totalPnlUsdc,
+        portfolioValueUsdc: ledger.summary.portfolioValueUsdc,
         materialChanges,
         actionCounts: actionCounts(iteration.candidates),
         blockerCounts: compact.summary.blockerCounts,
@@ -886,16 +973,18 @@ function renderText(report: Record<string, unknown>): string {
   for (const observation of observations) {
     const summary = observation.summary as Record<string, unknown> | undefined;
     const universeRefresh = observation.universeRefresh as Record<string, unknown> | undefined;
+    const agentLoop = observation.agentLoop as Record<string, unknown> | undefined;
     lines.push(
       `- ${observation.sessionId}: ${observation.ran ? "ran" : `skipped ${observation.skipReason ?? ""}`}; ` +
-      `$${Number(summary?.spentUsdc ?? 0).toFixed(4)} spent, ` +
-      `$${Number(summary?.remainingBudgetUsdc ?? 0).toFixed(4)} remaining, ` +
-      `${summary?.openPositions ?? 0} open, ` +
-      `$${Number(summary?.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized PnL, ` +
+      `$${Number(observation.spentUsdc ?? summary?.spentUsdc ?? 0).toFixed(4)} spent, ` +
+      `$${Number(observation.remainingBudgetUsdc ?? summary?.remainingBudgetUsdc ?? 0).toFixed(4)} remaining, ` +
+      `${summary?.openPositions ?? (Array.isArray(observation.openPositions) ? observation.openPositions.length : 0)} open, ` +
+      `$${Number(observation.unrealizedPnlUsdc ?? summary?.unrealizedPnlUsdc ?? 0).toFixed(6)} unrealized PnL, ` +
       `${(observation.paperExecutionReport as Record<string, unknown> | undefined)?.orderCount ?? 0} paper orders, ` +
       `${Number((observation.paperExecutionReport as Record<string, unknown> | undefined)?.notionalFillRate ?? 0).toFixed(4)} fill rate, ` +
       `${observation.paperBuyProposalCount ?? 0} buy proposals, ` +
       `${observation.paperExitProposalCount ?? 0} exit proposals, ` +
+      `agent ${agentLoop?.enabled ? `on/${(agentLoop?.applied as Record<string, unknown> | undefined)?.recorded ?? 0} recorded` : "off"}, ` +
       `universe ${universeRefresh?.refreshed ? "refreshed" : `kept ${universeRefresh?.reason ?? "unknown"}`}, ` +
       `snapshots ${(observation.snapshotRefresh as Record<string, unknown> | undefined)?.refreshed ?? 0} refreshed`
     );

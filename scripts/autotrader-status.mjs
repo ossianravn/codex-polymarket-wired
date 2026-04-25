@@ -131,6 +131,10 @@ function renderText(status) {
   const executionLine = execution
     ? `Paper execution: ${execution.orderCount ?? 0} orders; fill rate ${((execution.notionalFillRate ?? 0) * 100).toFixed(2)}%; missed ${execution.missedCount ?? 0}; partial ${execution.partialFillCount ?? 0}; rejected ${execution.rejectedCount ?? 0}`
     : "Paper execution: unknown";
+  const agentLoop = latest.agentLoop;
+  const agentLine = agentLoop?.enabled
+    ? `Agent loop: on; candidates ${agentLoop.candidateCount ?? 0}; plan ${agentLoop.planProvided ? "provided" : "missing"}; recorded ${agentLoop.applied?.recorded ?? 0}; blocked ${agentLoop.applied?.blocked ?? 0}`
+    : "Agent loop: off";
   return [
     `Autotrader status: ${(status.latest.noSubmitInvariantHeld ?? latest.noSubmitInvariantHeld) ? "safe-no-submit" : "SAFETY VIOLATION"}`,
     `Generated: ${latest.generatedAt ?? status.latest.generatedAt}`,
@@ -141,6 +145,7 @@ function renderText(status) {
     budgetLine,
     pnlLine,
     executionLine,
+    agentLine,
     `Paper proposals: ${latest.paperBuyProposalCount ?? 0} buy, ${latest.paperExitProposalCount ?? 0} exit`,
     `Position diagnostics: ${latest.positionDiagnosticCount ?? 0}`,
     `Preview IDs: ${(latest.previewIds ?? []).join(", ") || "none"}`,
