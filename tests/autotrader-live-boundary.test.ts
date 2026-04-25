@@ -11,6 +11,8 @@ import { TOOLS } from "../servers/polymarket-mcp/src/tool-specs.js";
 type ToolInputProperties = {
   auto_submit: { default: boolean };
   live_autonomous_submit_confirmation: { type: string };
+  refresh_snapshots: { default: boolean };
+  refresh_snapshot_limit: { default: number };
 };
 
 function toolInputProperties(name: string): ToolInputProperties {
@@ -56,4 +58,14 @@ test("auto-trading execution tools are preview-only by default", () => {
   assert.equal(executeProperties.live_autonomous_submit_confirmation.type, "string");
   assert.equal(executorProperties.auto_submit.default, false);
   assert.equal(executorProperties.live_autonomous_submit_confirmation.type, "string");
+});
+
+test("auto-trading planning tools refresh snapshots by default", () => {
+  const startProperties = toolInputProperties("start_auto_trading_session");
+  const iterationProperties = toolInputProperties("run_auto_trading_iteration");
+
+  assert.equal(startProperties.refresh_snapshots.default, true);
+  assert.equal(startProperties.refresh_snapshot_limit.default, 50);
+  assert.equal(iterationProperties.refresh_snapshots.default, true);
+  assert.equal(iterationProperties.refresh_snapshot_limit.default, 50);
 });

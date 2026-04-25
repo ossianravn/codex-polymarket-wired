@@ -7,8 +7,10 @@ import {
   compactAutoTradingIterationResult,
   evaluateUniverseFreshness,
   normalizeAutoTradingMandate,
+  refreshAutoTradingMarketSnapshots,
   runAutoTradingIteration,
   runIndependentForecastWriter,
+  type AutoTradingSnapshotRefreshResult,
   type AutoTradingMandateInput
 } from "../packages/auto-trader/src/index.js";
 import {
@@ -39,6 +41,9 @@ export interface AutotraderDaemonOptions {
   limit: number;
   autoForecast: boolean;
   autoRefreshUniverse?: boolean;
+  autoRefreshSnapshots?: boolean;
+  refreshSnapshotLimit?: number;
+  refreshSnapshotMaxAgeMinutes?: number;
   maxUniverseAgeMinutes?: number;
   universeSource?: UniverseSource;
   universePageSize?: number;
@@ -135,6 +140,9 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     limit: envNumber("AUTOTRADER_LIMIT", 10),
     autoForecast: envBoolean("AUTOTRADER_AUTO_FORECAST", true),
     autoRefreshUniverse: envBoolean("AUTOTRADER_AUTO_REFRESH_UNIVERSE", true),
+    autoRefreshSnapshots: envBoolean("AUTOTRADER_REFRESH_SNAPSHOTS", true),
+    refreshSnapshotLimit: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_LIMIT", 50),
+    refreshSnapshotMaxAgeMinutes: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_MAX_AGE_MINUTES", 5),
     maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
     universeSource: envString("AUTOTRADER_UNIVERSE_SOURCE") as UniverseSource | undefined,
     universePageSize: envNumber("AUTOTRADER_UNIVERSE_PAGE_SIZE", 250),
@@ -180,6 +188,16 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
       options.autoRefreshUniverse = false;
     } else if (arg === "--auto-refresh-universe") {
       options.autoRefreshUniverse = true;
+    } else if (arg === "--refresh-snapshots") {
+      options.autoRefreshSnapshots = true;
+    } else if (arg === "--no-refresh-snapshots") {
+      options.autoRefreshSnapshots = false;
+    } else if (arg === "--refresh-snapshot-limit" || arg.startsWith("--refresh-snapshot-limit=")) {
+      options.refreshSnapshotLimit = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--refresh-snapshot-max-age-minutes" || arg.startsWith("--refresh-snapshot-max-age-minutes=")) {
+      options.refreshSnapshotMaxAgeMinutes = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--max-universe-age-minutes" || arg.startsWith("--max-universe-age-minutes=")) {
       options.maxUniverseAgeMinutes = Number(readArgValue(argv, index));
       if (consumedNext(argv, index)) index += 1;
@@ -218,11 +236,33 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
   options.intervalSeconds = Math.max(5, Math.min(24 * 60 * 60, options.intervalSeconds));
   options.schedulerSlackSeconds = Math.max(0, Math.min(60 * 60, options.schedulerSlackSeconds));
   options.limit = Math.max(1, Math.min(100, options.limit));
+  options.refreshSnapshotLimit = Math.max(1, Math.min(250, Number(options.refreshSnapshotLimit ?? 50)));
+  options.refreshSnapshotMaxAgeMinutes = Math.max(0, Math.min(24 * 60, Number(options.refreshSnapshotMaxAgeMinutes ?? 5)));
   options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes ?? 10)));
   options.universePageSize = Math.max(25, Math.min(1_000, Number(options.universePageSize ?? 250)));
   options.universeLimitPages = Math.max(1, Math.min(100, Number(options.universeLimitPages ?? 1)));
   options.universeEnrichTopN = Math.max(0, Math.min(5_000, Number(options.universeEnrichTopN ?? 250)));
   return options;
+}
+
+async function refreshSnapshotsForSession(
+  store: StateStore,
+  mandate: ReturnType<typeof normalizeAutoTradingMandate>,
+  universeRefresh: UniverseRefreshResult,
+  options: AutotraderDaemonOptions,
+  now: Date
+): Promise<AutoTradingSnapshotRefreshResult | undefined> {
+  if (options.autoRefreshSnapshots === false) {
+    return undefined;
+  }
+  const runtimeConfig = loadRuntimeConfig();
+  return refreshAutoTradingMarketSnapshots(store, runtimeConfig, {
+    runId: universeRefresh.runId ?? universeRefresh.latestRunId,
+    mandate,
+    limit: options.refreshSnapshotLimit,
+    maxAgeMinutes: options.refreshSnapshotMaxAgeMinutes,
+    now
+  });
 }
 
 function absolutePath(value: string): string {
@@ -679,6 +719,13 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
       const universeRefresh = await ensureFreshUniverse(store, options, now);
       const decisionNow = universeRefresh.refreshed ? new Date() : now;
       const mandate = normalizeAutoTradingMandate(session.mandate as unknown as AutoTradingMandateInput);
+      const snapshotRefresh = await refreshSnapshotsForSession(
+        store,
+        mandate,
+        universeRefresh,
+        options,
+        decisionNow
+      );
       const forecastWriter = options.autoForecast
         ? runIndependentForecastWriter(store, {
           now: decisionNow,
@@ -708,6 +755,7 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         runId: iteration.runId,
         iterationId: iteration.iterationId,
         universeRefresh,
+        snapshotRefresh,
         forecastWriter,
         summary: compact.summary,
         budgetUsdc: compact.summary.budgetUsdc,
@@ -810,7 +858,8 @@ function renderText(report: Record<string, unknown>): string {
       `${Number((observation.paperExecutionReport as Record<string, unknown> | undefined)?.notionalFillRate ?? 0).toFixed(4)} fill rate, ` +
       `${observation.paperBuyProposalCount ?? 0} buy proposals, ` +
       `${observation.paperExitProposalCount ?? 0} exit proposals, ` +
-      `universe ${universeRefresh?.refreshed ? "refreshed" : `kept ${universeRefresh?.reason ?? "unknown"}`}`
+      `universe ${universeRefresh?.refreshed ? "refreshed" : `kept ${universeRefresh?.reason ?? "unknown"}`}, ` +
+      `snapshots ${(observation.snapshotRefresh as Record<string, unknown> | undefined)?.refreshed ?? 0} refreshed`
     );
   }
   return lines.join("\n");

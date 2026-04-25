@@ -60,6 +60,9 @@ function parseArgs(argv = process.argv.slice(2)) {
     maxSpreadCents: envNumber("AUTOTRADER_MAX_SPREAD_CENTS", 12),
     stopLossUsdc: envNumber("AUTOTRADER_STOP_LOSS_USDC", 10),
     limit: envNumber("AUTOTRADER_LIMIT", 25),
+    refreshSnapshots: envBoolean("AUTOTRADER_REFRESH_SNAPSHOTS", true),
+    refreshSnapshotLimit: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_LIMIT", 50),
+    refreshSnapshotMaxAgeMinutes: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_MAX_AGE_MINUTES", 5),
     executorLimit: envNumber("AUTOTRADER_EXECUTOR_LIMIT", 5),
     previewLimit: envNumber("AUTOTRADER_PREVIEW_LIMIT", 1),
     respectNextRunAt: envBoolean("AUTOTRADER_RESPECT_NEXT_RUN_AT", true),
@@ -163,6 +166,20 @@ function parseArgs(argv = process.argv.slice(2)) {
       index += 1;
     } else if (arg.startsWith("--limit=")) {
       options.limit = Number(arg.split("=")[1]);
+    } else if (arg === "--refresh-snapshots") {
+      options.refreshSnapshots = true;
+    } else if (arg === "--no-refresh-snapshots") {
+      options.refreshSnapshots = false;
+    } else if (arg === "--refresh-snapshot-limit") {
+      options.refreshSnapshotLimit = Number(next);
+      index += 1;
+    } else if (arg.startsWith("--refresh-snapshot-limit=")) {
+      options.refreshSnapshotLimit = Number(arg.split("=")[1]);
+    } else if (arg === "--refresh-snapshot-max-age-minutes") {
+      options.refreshSnapshotMaxAgeMinutes = Number(next);
+      index += 1;
+    } else if (arg.startsWith("--refresh-snapshot-max-age-minutes=")) {
+      options.refreshSnapshotMaxAgeMinutes = Number(arg.split("=")[1]);
     } else if (arg === "--executor-limit") {
       options.executorLimit = Number(next);
       index += 1;
@@ -201,6 +218,8 @@ function parseArgs(argv = process.argv.slice(2)) {
       options.latestReportPath = arg.split("=")[1];
     }
   }
+  options.refreshSnapshotLimit = Math.max(1, Math.min(250, Number(options.refreshSnapshotLimit)));
+  options.refreshSnapshotMaxAgeMinutes = Math.max(0, Math.min(24 * 60, Number(options.refreshSnapshotMaxAgeMinutes)));
   return options;
 }
 
@@ -510,6 +529,7 @@ function compactObservation(report) {
     eligibleMarkets: iterationSummary?.eligibleMarkets,
     researchBundlesReady: report.iteration?.researchPipeline?.provider?.writtenBundles,
     researchRunsRecorded: report.iteration?.researchPipeline?.worker?.recordedResearchRuns,
+    snapshotRefresh: report.iteration?.snapshotRefresh,
     proposedOrders: iterationSummary?.proposedOrders,
     exitOrders: iterationSummary?.exitOrders,
     researchRequired: iterationSummary?.researchRequired,
@@ -673,6 +693,9 @@ async function findOrCreateSession(client, options, report) {
     min_liquidity_usdc: options.minLiquidityUsdc,
     max_spread_cents: options.maxSpreadCents,
     stop_loss_usdc: Math.min(options.stopLossUsdc, options.budgetUsdc),
+    refresh_snapshots: options.refreshSnapshots,
+    refresh_snapshot_limit: options.refreshSnapshotLimit,
+    refresh_snapshot_max_age_minutes: options.refreshSnapshotMaxAgeMinutes,
     limit: options.limit,
     compact: true
   });
@@ -841,6 +864,9 @@ async function main() {
       : await callTool(client, "run_auto_trading_iteration", {
         session_id: session.sessionId,
         limit: options.limit,
+        refresh_snapshots: options.refreshSnapshots,
+        refresh_snapshot_limit: options.refreshSnapshotLimit,
+        refresh_snapshot_max_age_minutes: options.refreshSnapshotMaxAgeMinutes,
         research_source_packs: researchSourcePacks,
         compact: true
       });
@@ -852,6 +878,7 @@ async function main() {
       startedThisRun: session.started,
       actionCounts: countActions(decisions),
       researchPipeline: iteration.output?.researchPipeline,
+      snapshotRefresh: iteration.output?.snapshotRefresh,
       summary,
       proposedOrders: summary?.proposedOrders,
       exitOrders: summary?.exitOrders,

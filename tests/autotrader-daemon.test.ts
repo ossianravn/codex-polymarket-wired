@@ -61,6 +61,9 @@ test("daemon argument parser defaults to paper loop and supports once mode", () 
   assert.equal(options.sessionId, "abc");
   assert.equal(options.limit, 7);
   assert.equal(options.autoRefreshUniverse, true);
+  assert.equal(options.autoRefreshSnapshots, true);
+  assert.equal(options.refreshSnapshotLimit, 50);
+  assert.equal(options.refreshSnapshotMaxAgeMinutes, 5);
   assert.equal(options.stateDbPath, "state/test.sqlite");
 });
 
@@ -266,10 +269,13 @@ test("daemon once includes paper execution report on run observations", async ()
       const observations = report.observations as Array<Record<string, unknown>>;
       const executionReport = observations[0]?.paperExecutionReport as Record<string, unknown> | undefined;
       const universeRefresh = observations[0]?.universeRefresh as Record<string, unknown> | undefined;
+      const snapshotRefresh = observations[0]?.snapshotRefresh as Record<string, unknown> | undefined;
       assert.equal(report.ok, true);
       assert.equal(observations[0]?.ran, true);
       assert.equal(universeRefresh?.refreshed, false);
       assert.equal(universeRefresh?.reason, "disabled");
+      assert.equal(snapshotRefresh?.scannedMarkets, 0);
+      assert.equal(snapshotRefresh?.refreshed, 0);
       assert.equal(executionReport?.orderCount, 0);
       assert.equal(executionReport?.notionalFillRate, 0);
       assert.deepEqual(observations[0]?.materialChanges, []);

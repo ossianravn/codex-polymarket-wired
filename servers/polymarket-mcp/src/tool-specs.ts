@@ -308,6 +308,13 @@ export const TOOLS: ToolSpec[] = [
           default: true,
           description: "Write sealed screening independentForecast artifacts for eligible universe markets before planning."
         },
+        refresh_snapshots: {
+          type: "boolean",
+          default: true,
+          description: "Refresh shortlisted candidate orderbook snapshots before planning so stale prices do not drive paper entries."
+        },
+        refresh_snapshot_limit: { type: "integer", minimum: 1, maximum: 250, default: 50 },
+        refresh_snapshot_max_age_minutes: { type: "number", minimum: 0, maximum: 1440, default: 5 },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
         compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }
       },
@@ -330,6 +337,13 @@ export const TOOLS: ToolSpec[] = [
           default: true,
           description: "Write sealed screening independentForecast artifacts for eligible universe markets before planning."
         },
+        refresh_snapshots: {
+          type: "boolean",
+          default: true,
+          description: "Refresh shortlisted candidate orderbook snapshots before planning so stale prices do not drive paper entries."
+        },
+        refresh_snapshot_limit: { type: "integer", minimum: 1, maximum: 250, default: 50 },
+        refresh_snapshot_max_age_minutes: { type: "number", minimum: 0, maximum: 1440, default: 5 },
         research_source_packs: {
           type: "array",
           maxItems: 50,

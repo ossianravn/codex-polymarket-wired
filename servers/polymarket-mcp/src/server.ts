@@ -72,6 +72,7 @@ import {
   buildAutoTradingExecutionGate,
   compactAutoTradingIterationResult,
   normalizeAutoTradingMandate,
+  refreshAutoTradingMarketSnapshots,
   runIndependentForecastWriter,
   runResearchEvidencePipeline,
   runAutoTradingIteration,
@@ -1699,6 +1700,9 @@ server.registerTool(
       paper_reentry_cooldown_minutes: z.number().min(0).optional(),
       time_exit_hours: z.number().min(0).optional(),
       auto_forecast: z.boolean().default(true),
+      refresh_snapshots: z.boolean().default(true),
+      refresh_snapshot_limit: z.number().int().min(1).max(250).default(50),
+      refresh_snapshot_max_age_minutes: z.number().min(0).max(24 * 60).default(5),
       limit: z.number().int().min(1).max(100).default(25),
       compact: z.boolean().default(true)
     }
@@ -1725,6 +1729,13 @@ server.registerTool(
       timeExitHours: input.time_exit_hours
     } satisfies AutoTradingMandateInput;
     const mandate = normalizeAutoTradingMandate(mandateInput);
+    const snapshotRefresh = input.refresh_snapshots
+      ? await refreshAutoTradingMarketSnapshots(store, config, {
+        mandate,
+        limit: input.refresh_snapshot_limit,
+        maxAgeMinutes: input.refresh_snapshot_max_age_minutes
+      })
+      : undefined;
     const forecastWriter = input.auto_forecast
       ? runIndependentForecastWriter(store, {
         limit: Math.max(input.limit * 80, 1_000),
@@ -1743,12 +1754,14 @@ server.registerTool(
       findingsCount: result.candidates.length,
       summary: `started auto-trading session ${result.session.sessionId}; proposed ${result.summary.proposedOrders} paper orders`,
       output: {
+        snapshotRefresh,
         forecastWriter,
         iteration: compactAutoTradingIterationResult(result)
       } as unknown as Record<string, unknown>
     });
     const response = input.compact ? compactAutoTradingIterationResult(result) : result;
     return textResult({
+      snapshotRefresh,
       forecastWriter,
       ...response
     } as unknown as Record<string, unknown>);
@@ -1790,6 +1803,9 @@ server.registerTool(
       session_id: z.string().min(1),
       limit: z.number().int().min(1).max(100).default(25),
       auto_forecast: z.boolean().default(true),
+      refresh_snapshots: z.boolean().default(true),
+      refresh_snapshot_limit: z.number().int().min(1).max(250).default(50),
+      refresh_snapshot_max_age_minutes: z.number().min(0).max(24 * 60).default(5),
       research_source_packs: z.array(z.record(z.string(), z.unknown())).max(50).optional(),
       compact: z.boolean().default(true)
     }
@@ -1800,6 +1816,13 @@ server.registerTool(
     const existingSession = store.getAutoTradingSession(input.session_id);
     const mandate = existingSession
       ? normalizeAutoTradingMandate(existingSession.mandate as unknown as AutoTradingMandateInput)
+      : undefined;
+    const snapshotRefresh = input.refresh_snapshots && mandate
+      ? await refreshAutoTradingMarketSnapshots(store, config, {
+        mandate,
+        limit: input.refresh_snapshot_limit,
+        maxAgeMinutes: input.refresh_snapshot_max_age_minutes
+      })
       : undefined;
     const sourcePacks = input.research_source_packs as unknown as ResearchSourcePack[] | undefined;
     const researchPipeline = sourcePacks && sourcePacks.length > 0
@@ -1828,6 +1851,7 @@ server.registerTool(
       findingsCount: result.candidates.length,
       summary: `auto-trading session ${result.session.sessionId}; proposed ${result.summary.proposedOrders} paper orders`,
       output: {
+        snapshotRefresh,
         researchPipeline,
         forecastWriter,
         iteration: compactAutoTradingIterationResult(result)
@@ -1835,6 +1859,7 @@ server.registerTool(
     });
     const response = input.compact ? compactAutoTradingIterationResult(result) : result;
     return textResult({
+      snapshotRefresh,
       researchPipeline,
       forecastWriter,
       ...response
