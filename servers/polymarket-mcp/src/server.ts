@@ -1685,6 +1685,8 @@ server.registerTool(
       stop_loss_usdc: z.number().min(0).optional(),
       take_profit_pct: z.number().positive().optional(),
       position_stop_loss_pct: z.number().positive().optional(),
+      position_stop_loss_grace_minutes: z.number().min(0).optional(),
+      paper_reentry_cooldown_minutes: z.number().min(0).optional(),
       time_exit_hours: z.number().min(0).optional(),
       limit: z.number().int().min(1).max(100).default(25),
       compact: z.boolean().default(true)
@@ -1708,6 +1710,8 @@ server.registerTool(
         stopLossUsdc: input.stop_loss_usdc,
         takeProfitPct: input.take_profit_pct,
         positionStopLossPct: input.position_stop_loss_pct,
+        positionStopLossGraceMinutes: input.position_stop_loss_grace_minutes,
+        paperReentryCooldownMinutes: input.paper_reentry_cooldown_minutes,
         timeExitHours: input.time_exit_hours
       },
       limit: input.limit

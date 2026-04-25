@@ -40,6 +40,8 @@ export interface AutoTradingMandateInput {
   stopLossUsdc?: number;
   takeProfitPct?: number;
   positionStopLossPct?: number;
+  positionStopLossGraceMinutes?: number;
+  paperReentryCooldownMinutes?: number;
   timeExitHours?: number;
   heartbeatMinutes?: number;
   allowedCategoryGroups?: string[];
@@ -192,6 +194,8 @@ export interface CompactAutoTradingIterationResult {
     | "maxSpreadCents"
     | "takeProfitPct"
     | "positionStopLossPct"
+    | "positionStopLossGraceMinutes"
+    | "paperReentryCooldownMinutes"
     | "timeExitHours"
     | "heartbeatMinutes"
   >;
@@ -306,6 +310,8 @@ interface RiskDefaults {
   stopLossBudgetFraction: number;
   takeProfitPct: number;
   positionStopLossPct: number;
+  positionStopLossGraceMinutes: number;
+  paperReentryCooldownMinutes: number;
   timeExitHours: number;
   heartbeatMinutes: number;
   includeLongshots: boolean;
@@ -329,6 +335,8 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     stopLossBudgetFraction: 0.12,
     takeProfitPct: 15,
     positionStopLossPct: 8,
+    positionStopLossGraceMinutes: 30,
+    paperReentryCooldownMinutes: 60,
     timeExitHours: 2,
     heartbeatMinutes: 60,
     includeLongshots: false,
@@ -350,6 +358,8 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     stopLossBudgetFraction: 0.22,
     takeProfitPct: 25,
     positionStopLossPct: 15,
+    positionStopLossGraceMinutes: 20,
+    paperReentryCooldownMinutes: 30,
     timeExitHours: 1,
     heartbeatMinutes: 30,
     includeLongshots: true,
@@ -371,6 +381,8 @@ const RISK_DEFAULTS: Record<AutoTradingRiskProfile, RiskDefaults> = {
     stopLossBudgetFraction: 0.35,
     takeProfitPct: 45,
     positionStopLossPct: 25,
+    positionStopLossGraceMinutes: 10,
+    paperReentryCooldownMinutes: 15,
     timeExitHours: 0.25,
     heartbeatMinutes: 15,
     includeLongshots: true,
@@ -543,6 +555,8 @@ export function normalizeAutoTradingMandate(input: AutoTradingMandateInput): Aut
     stopLossUsdc: Math.max(0, input.stopLossUsdc ?? budgetUsdc * defaults.stopLossBudgetFraction),
     takeProfitPct: Math.max(1, input.takeProfitPct ?? defaults.takeProfitPct),
     positionStopLossPct: Math.max(1, input.positionStopLossPct ?? defaults.positionStopLossPct),
+    positionStopLossGraceMinutes: Math.max(0, input.positionStopLossGraceMinutes ?? defaults.positionStopLossGraceMinutes),
+    paperReentryCooldownMinutes: Math.max(0, input.paperReentryCooldownMinutes ?? defaults.paperReentryCooldownMinutes),
     timeExitHours: Math.max(0, input.timeExitHours ?? defaults.timeExitHours),
     heartbeatMinutes: Math.max(5, input.heartbeatMinutes ?? defaults.heartbeatMinutes),
     allowedCategoryGroups: input.allowedCategoryGroups ?? [],
@@ -673,6 +687,17 @@ function hoursUntil(now: Date, isoValue: unknown): number | undefined {
   return (parsed - now.getTime()) / (1000 * 60 * 60);
 }
 
+function hoursSince(now: Date, isoValue: unknown): number | undefined {
+  if (typeof isoValue !== "string" || !isoValue.trim()) {
+    return undefined;
+  }
+  const parsed = Date.parse(isoValue);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return (now.getTime() - parsed) / (1000 * 60 * 60);
+}
+
 function buildPaperExitDecisions(
   ledger: StoredPaperTradingLedger,
   mandate: AutoTradingMandate,
@@ -689,6 +714,10 @@ function buildPaperExitDecisions(
       const unrealizedPnlPct = position.unrealizedPnlPct ?? 0;
       const hoursToMarketEnd = hoursUntil(now, position.metadata.endDate);
       const hoursToSessionEnd = hoursUntil(now, session.endsAt);
+      const positionAgeMinutes = (hoursSince(now, position.openedAt) ?? Number.POSITIVE_INFINITY) * 60;
+      const stopLossGraceActive =
+        positionAgeMinutes < mandate.positionStopLossGraceMinutes &&
+        unrealizedPnlPct > -mandate.positionStopLossPct * 2;
       const reasonCodes: string[] = [];
       const blockers: string[] = [];
 
@@ -698,7 +727,7 @@ function buildPaperExitDecisions(
       if (unrealizedPnlPct >= mandate.takeProfitPct) {
         reasonCodes.push("take_profit");
       }
-      if (unrealizedPnlPct <= -mandate.positionStopLossPct) {
+      if (unrealizedPnlPct <= -mandate.positionStopLossPct && !stopLossGraceActive) {
         reasonCodes.push("position_stop_loss");
       }
       if (hoursToMarketEnd !== undefined && hoursToMarketEnd <= mandate.timeExitHours) {
@@ -740,6 +769,36 @@ function buildPaperExitDecisions(
       };
     })
     .filter((decision) => isExitAction(decision.action));
+}
+
+function recentPaperReentryBlocker(
+  market: Record<string, unknown>,
+  ledger: StoredPaperTradingLedger,
+  mandate: AutoTradingMandate,
+  now: Date
+): string | undefined {
+  if (mandate.mode !== "paper" || mandate.paperReentryCooldownMinutes <= 0) {
+    return undefined;
+  }
+  const marketKey = typeof market.marketKey === "string" ? market.marketKey : undefined;
+  if (!marketKey) {
+    return undefined;
+  }
+  const recentExit = ledger.positions
+    .filter((position) => position.status === "closed" && position.marketKey === marketKey && position.closedAt)
+    .sort((left, right) => Date.parse(right.closedAt ?? "") - Date.parse(left.closedAt ?? ""))
+    .at(0);
+  if (!recentExit?.closedAt) {
+    return undefined;
+  }
+  const minutesSinceExit = (hoursSince(now, recentExit.closedAt) ?? Number.POSITIVE_INFINITY) * 60;
+  if (minutesSinceExit > mandate.paperReentryCooldownMinutes) {
+    return undefined;
+  }
+  const exitReasonCodes = asStringArray(recentExit.metadata.exitReasonCodes);
+  return exitReasonCodes.includes("position_stop_loss")
+    ? "paper_recent_stop_loss_reentry_cooldown"
+    : "paper_recent_exit_reentry_cooldown";
 }
 
 function budgetRotationEdgeThreshold(riskProfile: AutoTradingRiskProfile): number {
@@ -1114,6 +1173,8 @@ function createSession(store: StateStore, mandate: AutoTradingMandate, now: Date
       stopLossUsdc: mandate.stopLossUsdc,
       takeProfitPct: mandate.takeProfitPct,
       positionStopLossPct: mandate.positionStopLossPct,
+      positionStopLossGraceMinutes: mandate.positionStopLossGraceMinutes,
+      paperReentryCooldownMinutes: mandate.paperReentryCooldownMinutes,
       timeExitHours: mandate.timeExitHours
     },
     metadata: {
@@ -1205,6 +1266,8 @@ export function compactAutoTradingIterationResult(
       maxSpreadCents: result.mandate.maxSpreadCents,
       takeProfitPct: result.mandate.takeProfitPct,
       positionStopLossPct: result.mandate.positionStopLossPct,
+      positionStopLossGraceMinutes: result.mandate.positionStopLossGraceMinutes,
+      paperReentryCooldownMinutes: result.mandate.paperReentryCooldownMinutes,
       timeExitHours: result.mandate.timeExitHours,
       heartbeatMinutes: result.mandate.heartbeatMinutes
     },
@@ -1402,6 +1465,7 @@ export function runAutoTradingIteration(
       const targetPrice = targetPriceForPassiveBuy(market);
       const tokenId = typeof market.yesTokenId === "string" ? market.yesTokenId : asStringArray(market.clobTokenIds).at(0);
       const eventKey = eventIdentity(market);
+      const reentryBlocker = recentPaperReentryBlocker(market, ledger, mandate, now);
       const reasonCodes = [
         ...asStringArray(market.reasonCodes),
         `risk_profile:${mandate.riskProfile}`,
@@ -1416,7 +1480,11 @@ export function runAutoTradingIteration(
         action = "skip";
         status = "blocked";
       } else if (score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold && targetPrice !== undefined && tokenId) {
-        if (riskBlockedNewBuys) {
+        if (reentryBlocker) {
+          action = "monitor";
+          status = "watch";
+          blockers.push(reentryBlocker);
+        } else if (riskBlockedNewBuys) {
           action = "monitor";
           status = "watch";
           blockers.push("session_stop_loss_reached");

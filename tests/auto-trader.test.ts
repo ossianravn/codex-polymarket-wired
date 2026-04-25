@@ -361,6 +361,153 @@ test("auto-trader exits paper positions on take profit and realizes PnL", async 
   });
 });
 
+test("auto-trader waits through stop-loss grace before exiting fresh paper positions", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const market = (runId: string, capturedAt: Date, price: number) => ({
+      runId,
+      marketKey: "condition:fresh-stop",
+      conditionId: "fresh-stop",
+      slug: "fresh-stop",
+      eventSlug: "fresh-stop-event",
+      eventTitle: "Fresh stop event",
+      title: "Fresh stop-loss market",
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [price, Number((1 - price).toFixed(4))],
+      clobTokenIds: ["fresh-stop-yes", "fresh-stop-no"],
+      yesTokenId: "fresh-stop-yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 20_000,
+      impliedProb: price,
+      bestBid: price,
+      bestAsk: Number(Math.min(0.99, price + 0.02).toFixed(4)),
+      midpoint: price,
+      spreadCents: 2,
+      categoryGroup: "crypto",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "execution-ready",
+      modelabilityScore: 80,
+      tradabilityScore: 85,
+      catalystScore: 85,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 84,
+      tradeOpportunityScore: 92,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: {},
+      capturedAt: capturedAt.toISOString()
+    });
+
+    const runId1 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId1, [market(runId1, now, 0.5)]);
+
+    const first = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5,
+        maxEventExposureUsdc: 5,
+        positionStopLossPct: 10,
+        positionStopLossGraceMinutes: 30,
+        paperReentryCooldownMinutes: 60,
+        timeExitHours: 0
+      }
+    });
+
+    assert.equal(first.summary.proposedOrders, 1);
+
+    const insideGrace = new Date(now.getTime() + 5 * 60 * 1000);
+    const runId2 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: insideGrace.toISOString(),
+      completedAt: insideGrace.toISOString()
+    });
+    store.recordUniverseMarkets(runId2, [market(runId2, insideGrace, 0.41)]);
+
+    const second = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: insideGrace,
+      limit: 4
+    });
+
+    assert.equal(second.summary.exitOrders, 0);
+    assert.equal(second.summary.openPositions, 1);
+    assert.equal(second.candidates.some((candidate) => candidate.action === "paper_sell_yes"), false);
+
+    const afterGrace = new Date(now.getTime() + 31 * 60 * 1000);
+    const runId3 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: afterGrace.toISOString(),
+      completedAt: afterGrace.toISOString()
+    });
+    store.recordUniverseMarkets(runId3, [market(runId3, afterGrace, 0.41)]);
+
+    const third = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: afterGrace,
+      limit: 4
+    });
+
+    const exit = third.candidates.find((candidate) => candidate.action === "paper_sell_yes");
+    assert.equal(third.summary.exitOrders, 1);
+    assert.equal(exit?.marketKey, "condition:fresh-stop");
+    assert.ok(exit?.reasonCodes.includes("position_stop_loss"));
+
+    const insideReentryCooldown = new Date(afterGrace.getTime() + 5 * 60 * 1000);
+    const runId4 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: insideReentryCooldown.toISOString(),
+      completedAt: insideReentryCooldown.toISOString()
+    });
+    store.recordUniverseMarkets(runId4, [market(runId4, insideReentryCooldown, 0.41)]);
+
+    const fourth = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: insideReentryCooldown,
+      limit: 4
+    });
+    const reentryCandidate = fourth.candidates.find((candidate) => candidate.marketKey === "condition:fresh-stop");
+    assert.equal(fourth.summary.proposedOrders, 0);
+    assert.equal(reentryCandidate?.action, "monitor");
+    assert.ok(reentryCandidate?.blockers.includes("paper_recent_stop_loss_reentry_cooldown"));
+  });
+});
+
 test("auto-trader blocks new paper buys after session stop loss", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");

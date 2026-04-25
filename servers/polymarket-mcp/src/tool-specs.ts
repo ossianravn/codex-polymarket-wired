@@ -300,6 +300,8 @@ export const TOOLS: ToolSpec[] = [
         stop_loss_usdc: { type: "number", minimum: 0 },
         take_profit_pct: { type: "number", exclusiveMinimum: 0 },
         position_stop_loss_pct: { type: "number", exclusiveMinimum: 0 },
+        position_stop_loss_grace_minutes: { type: "number", minimum: 0 },
+        paper_reentry_cooldown_minutes: { type: "number", minimum: 0 },
         time_exit_hours: { type: "number", minimum: 0 },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 25 },
         compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }

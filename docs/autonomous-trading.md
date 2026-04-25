@@ -25,6 +25,8 @@ min_liquidity_usdc: 5000
 max_spread_cents: 5
 take_profit_pct: 25
 position_stop_loss_pct: 15
+position_stop_loss_grace_minutes: 20
+paper_reentry_cooldown_minutes: 30
 time_exit_hours: 1
 stop_loss_usdc: 10
 ```
