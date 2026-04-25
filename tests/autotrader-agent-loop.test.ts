@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   applyAutoTradingAgentDecisionPlan,
   buildAutoTradingAgentBrief,
+  buildResearchEvidenceTemplate,
   runAutoTradingIteration
 } from "../packages/auto-trader/src/index.js";
 import { openStateStore, type StoredUniverseMarketInput } from "../packages/state-store/src/index.js";
@@ -191,5 +192,74 @@ test("agent loop records but blocks live execution requests in paper sessions", 
     assert.ok(applied.decisions[0]?.blockers.includes("live_action_blocked_in_paper_session"));
     assert.ok(applied.decisions[0]?.blockers.includes("live_submission_blocked_agent_loop"));
     assert.equal(applied.ledger.summary.spentUsdc, 0);
+  });
+});
+
+test("agent loop persists research requests for agent research-required decisions", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [marketFixture(runId, now)]);
+
+    const iteration = runAutoTradingIteration(store, {
+      now,
+      limit: 5,
+      persist: false,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5
+      }
+    });
+    const brief = buildAutoTradingAgentBrief({ iteration, candidateLimit: 3 });
+    const candidate = brief.candidates[0];
+    assert.ok(candidate);
+    candidate.blockers = ["independent_forecast_screening_only"];
+    candidate.reasonCodes = ["forecast_gate:screening_only"];
+
+    const applied = applyAutoTradingAgentDecisionPlan(store, brief, {
+      kind: "polymarket_autotrader_agent_decision_plan_v1",
+      sessionId: brief.session.sessionId,
+      agentName: "fixture-agent",
+      decisions: [{
+        decisionRef: "candidate-01",
+        action: "research_required",
+        confidence: 0.66,
+        rationale: "External evidence is required before this can become a tradable forecast.",
+        nextCheckMinutes: 20
+      }]
+    }, {
+      now,
+      iterationId: "agent-research-iteration-1"
+    });
+
+    assert.equal(applied.recorded, 1);
+    assert.equal(applied.blocked, 0);
+    assert.equal(applied.ledger.summary.spentUsdc, 0);
+    assert.equal(applied.ledger.summary.openPositionCount, 0);
+    assert.equal(applied.decisions[0]?.storedDecision?.action, "research_required");
+
+    const template = buildResearchEvidenceTemplate(store, {
+      sessionId: brief.session.sessionId,
+      now,
+      limit: 10
+    });
+
+    assert.equal(template.scannedDecisions, 1);
+    assert.equal(template.pendingRequests, 1);
+    assert.equal(template.templates.length, 1);
+    assert.equal(template.templates[0]?.marketKey, "condition:agent-pick");
+    assert.equal(template.templates[0]?.requiredArtifact.method, "deep_research_forecast_v1");
+    assert.ok(template.templates[0]?.forecastBlockers.includes("independent_forecast_screening_only"));
+    assert.match(template.templates[0]?.researchQuestion ?? "", /Agent-selected market/);
   });
 });

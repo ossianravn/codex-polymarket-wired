@@ -7,7 +7,8 @@ import type {
 } from "../../state-store/src/index.js";
 import type {
   AutoTradingAction,
-  AutoTradingIterationResult
+  AutoTradingIterationResult,
+  AutoTradingResearchRequest
 } from "./index.js";
 
 export type AutoTradingAgentAction =
@@ -207,6 +208,24 @@ function addMinutes(now: Date, minutes: number): string {
   return new Date(now.getTime() + Math.max(1, minutes) * 60_000).toISOString();
 }
 
+const FORECAST_RESEARCH_BLOCKERS = new Set([
+  "missing_independent_forecast",
+  "invalid_independent_forecast_probability",
+  "independent_forecast_not_sealed",
+  "independent_forecast_screening_only",
+  "independent_forecast_low_confidence_screening",
+  "independent_forecast_price_contaminated",
+  "independent_forecast_missing_numerical_check",
+  "independent_forecast_missing_forecasted_at",
+  "independent_forecast_from_future",
+  "independent_forecast_stale",
+  "independent_forecast_expired"
+]);
+
+function forecastResearchBlockers(blockers: string[]): string[] {
+  return blockers.filter((blocker) => FORECAST_RESEARCH_BLOCKERS.has(blocker));
+}
+
 function candidateDecisionRef(index: number): string {
   return `candidate-${String(index + 1).padStart(2, "0")}`;
 }
@@ -375,6 +394,73 @@ function findCandidate(
     (decision.decisionRef && candidate.decisionRef === decision.decisionRef) ||
     (decision.marketKey && candidate.marketKey === decision.marketKey)
   );
+}
+
+function buildAgentResearchRequest(
+  brief: AutoTradingAgentBrief,
+  candidate: AutoTradingAgentBriefCandidate,
+  decision: AutoTradingAgentDecision,
+  iterationId: string,
+  now: Date
+): AutoTradingResearchRequest | undefined {
+  const marketKey = candidate.marketKey ?? decision.marketKey;
+  if (decision.action !== "research_required" || !marketKey) {
+    return undefined;
+  }
+  const blockers = forecastResearchBlockers(candidate.blockers);
+  if (blockers.length === 0) {
+    return undefined;
+  }
+  return {
+    requestId: `research:${iterationId}:${marketKey}`,
+    createdAt: now.toISOString(),
+    dueAt: addMinutes(now, decision.nextCheckMinutes ?? 60),
+    priority: candidate.score >= 75 ? "high" : "medium",
+    marketKey,
+    title: candidate.title,
+    score: candidate.score,
+    forecastBlockers: blockers,
+    reasonCodes: candidate.reasonCodes,
+    requiredArtifact: {
+      method: "deep_research_forecast_v1",
+      minimumEvidenceItems: 2,
+      requiresCounterEvidence: true,
+      requiredFields: [
+        "fairValueLow",
+        "fairValueBase",
+        "fairValueHigh",
+        "supportsYes",
+        "supportsNo",
+        "openQuestions",
+        "providers",
+        "completedAt"
+      ],
+      forbiddenEvidence: [
+        "Polymarket odds",
+        "venue price",
+        "orderbook",
+        "best bid",
+        "best ask",
+        "spread",
+        "recent venue trades",
+        "market-implied probability"
+      ],
+      freshnessHours: Math.max(6, Math.min(24, brief.session.timeframeHours))
+    },
+    researchQuestion: candidate.title ?? candidate.market.eventTitle ?? marketKey,
+    marketContext: {
+      eventTitle: candidate.market.eventTitle,
+      eventSlug: candidate.market.eventSlug,
+      categoryGroup: candidate.market.categoryGroup,
+      structuralType: candidate.market.structuralType,
+      opportunityMode: candidate.market.opportunityMode,
+      horizonBucket: candidate.market.horizonBucket,
+      endDate: candidate.market.endDate,
+      outcomes: candidate.market.outcomes,
+      resolutionText: candidate.market.resolutionText,
+      reasonCodes: candidate.reasonCodes
+    }
+  };
 }
 
 function validateAgentDecision(
@@ -618,6 +704,9 @@ export function applyAutoTradingAgentDecisionPlan(
         ? roundShares(allocatedBudgetUsdc / Math.max(0.001, targetPrice))
         : undefined
     );
+    const researchRequest = candidate
+      ? buildAgentResearchRequest(brief, candidate, decision, iterationId, now)
+      : undefined;
     const storedDecision = store.recordAutoTradingDecision({
       sessionId: brief.session.sessionId,
       iterationId,
@@ -640,6 +729,7 @@ export function applyAutoTradingAgentDecisionPlan(
         tokenId: candidate?.tokenId,
         shares,
         market: candidate?.market,
+        researchRequest,
         liveSubmissionEnabled: false
       },
       createdAt: now.toISOString()
