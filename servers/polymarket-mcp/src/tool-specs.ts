@@ -375,6 +375,30 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "run_auto_trading_executor",
+    access: "write",
+    description:
+      "Run the autonomous execution loop for pending live-mode auto-trading decisions. It skips paper and already-executed decisions, creates guarded previews, waits for approval in live_guarded, and can submit in live_autonomous only after all checks pass.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        session_id: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 25, default: 5 },
+        auto_submit: {
+          type: "boolean",
+          default: true,
+          description: "For live_autonomous only. When false, create previews but do not submit."
+        },
+        dry_run: {
+          type: "boolean",
+          default: false,
+          description: "Return eligible decisions and gates without creating previews or submitting."
+        }
+      }
+    }
+  },
+  {
     name: "ingest_market_universe",
     access: "read",
     description:

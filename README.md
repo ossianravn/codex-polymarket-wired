@@ -136,6 +136,8 @@ For live modes, decisions become mode-aware:
 
 Use `execute_auto_trading_decision` to apply that mode behavior to a stored decision. It creates the guarded preview, records execution audit state on the decision, stops at `awaiting_approval` for `live_guarded`, and only submits in `live_autonomous` when preview policy, trading config, and credentials all pass.
 
+Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It supports `dry_run` for eligibility checks and `auto_submit=false` for autonomous sessions that should create previews without submitting.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:
@@ -165,6 +167,7 @@ The bundled MCP server currently exposes:
 - `get_auto_trading_session`
 - `get_auto_trading_execution_gate`
 - `execute_auto_trading_decision`
+- `run_auto_trading_executor`
 - `enrich_universe_markets`
 
 ### Write tools

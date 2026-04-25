@@ -116,6 +116,8 @@ Use `execute_auto_trading_decision` to apply the gate:
 
 Each execution attempt updates the decision payload with `execution` and `executionHistory` audit fields.
 
+Use `run_auto_trading_executor` to process pending live-mode decisions in batches. It ignores paper sessions and already-executed decisions, supports `dry_run`, stops at `awaiting_approval` for `live_guarded`, and can submit in `live_autonomous` only after the same checks used by `execute_auto_trading_decision`.
+
 ## MCP tools
 
 - `start_auto_trading_session`
@@ -123,6 +125,7 @@ Each execution attempt updates the decision payload with `execution` and `execut
 - `get_auto_trading_session`
 - `get_auto_trading_execution_gate`
 - `execute_auto_trading_decision`
+- `run_auto_trading_executor`
 
 These tools persist session, decision, paper-fill, and paper-position records. They return compact decision payloads by default so autonomous agents do not ingest raw market snapshots unless explicitly requested with `compact: false`. Paper experimentation remains safe because paper mode does not call live order submission.
 
