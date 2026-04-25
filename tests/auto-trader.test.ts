@@ -438,6 +438,14 @@ test("auto-trader records missed paper orders without spending ledger budget", a
     assert.equal(result.ledger.orders?.length, 1);
     assert.equal(result.ledger.orders?.[0]?.status, "missed");
     assert.deepEqual(result.ledger.orders?.[0]?.metadata.reasonCodes, ["limit_not_executable"]);
+    const report = store.getPaperTradingExecutionReport({ sessionId: result.session.sessionId });
+    assert.equal(report.orderCount, 1);
+    assert.equal(report.missedCount, 1);
+    assert.equal(report.fullFillCount, 0);
+    assert.equal(report.filledNotionalUsdc, 0);
+    assert.equal(report.requestedNotionalUsdc, result.ledger.orders?.[0]?.requestedNotionalUsdc);
+    assert.equal(report.notionalFillRate, 0);
+    assert.equal(report.reasonCodeCounts.limit_not_executable, 1);
   });
 });
 

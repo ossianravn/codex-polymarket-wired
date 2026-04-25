@@ -31,6 +31,8 @@
     "autotrader:status:json": "node ./scripts/autotrader-status.mjs --json",
     "autotrader:due-status": "node ./scripts/autotrader-status.mjs --due-status",
     "autotrader:due-status:json": "node ./scripts/autotrader-status.mjs --due-status --json",
+    "autotrader:paper-report": "tsx ./scripts/autotrader-paper-report.ts",
+    "autotrader:paper-report:json": "tsx ./scripts/autotrader-paper-report.ts --json",
     "universe:once": "tsx ./scripts/universe-discovery.ts",
     "forecast:write": "tsx ./scripts/forecast-writer.ts",
     "autotrader:once": "tsx ./scripts/autotrader-iteration.ts",

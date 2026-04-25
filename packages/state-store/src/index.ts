@@ -370,6 +370,27 @@ export interface StoredPaperTradingLedger {
   orders?: StoredPaperTradingOrderRecord[];
 }
 
+export interface StoredPaperTradingExecutionReport {
+  generatedAt: string;
+  sessionId?: string;
+  since?: string;
+  orderCount: number;
+  statusCounts: Record<string, number>;
+  requestedNotionalUsdc: number;
+  filledNotionalUsdc: number;
+  missedNotionalUsdc: number;
+  notionalFillRate: number;
+  averageOrderFillRatio: number;
+  fullFillCount: number;
+  partialFillCount: number;
+  missedCount: number;
+  rejectedCount: number;
+  expiredCount: number;
+  reasonCodeCounts: Record<string, number>;
+  warningCounts: Record<string, number>;
+  recentOrders: StoredPaperTradingOrderRecord[];
+}
+
 export interface StoredUniverseRunInput {
   runId?: string;
   startedAt?: string;
@@ -3218,26 +3239,98 @@ export class StateStore {
   }
 
   listPaperTradingOrders(args: {
-    sessionId: string;
+    sessionId?: string;
     status?: "filled" | "partial_filled" | "missed" | "expired" | "rejected";
+    since?: string;
     limit?: number;
   }): StoredPaperTradingOrderRecord[] {
     const limit = Math.max(1, Math.min(1000, args.limit ?? 100));
-    const where = ["session_id = ?"];
-    const params: SqlPrimitive[] = [args.sessionId];
+    const where: string[] = [];
+    const params: SqlPrimitive[] = [];
+    if (args.sessionId) {
+      where.push("session_id = ?");
+      params.push(args.sessionId);
+    }
     if (args.status) {
       where.push("status = ?");
       params.push(args.status);
+    }
+    if (args.since) {
+      where.push("created_at >= ?");
+      params.push(args.since);
     }
     params.push(limit);
     const rows = this.db.prepare(`
       SELECT *
       FROM paper_trading_orders
-      WHERE ${where.join(" AND ")}
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY created_at DESC, paper_order_id DESC
       LIMIT ?
     `).all(...params);
     return rows.map((row) => paperTradingOrderRowToRecord(row));
+  }
+
+  getPaperTradingExecutionReport(args?: {
+    sessionId?: string;
+    since?: string;
+    limit?: number;
+  }): StoredPaperTradingExecutionReport {
+    const orders = this.listPaperTradingOrders({
+      sessionId: args?.sessionId,
+      since: args?.since,
+      limit: 1000
+    });
+    const statusCounts: Record<string, number> = {};
+    const reasonCodeCounts: Record<string, number> = {};
+    const warningCounts: Record<string, number> = {};
+    let requestedNotionalUsdc = 0;
+    let filledNotionalUsdc = 0;
+    let missedNotionalUsdc = 0;
+    let fillRatioSum = 0;
+
+    for (const order of orders) {
+      statusCounts[order.status] = (statusCounts[order.status] ?? 0) + 1;
+      requestedNotionalUsdc += order.requestedNotionalUsdc;
+      filledNotionalUsdc += order.filledNotionalUsdc;
+      missedNotionalUsdc += Math.max(0, order.requestedNotionalUsdc - order.filledNotionalUsdc);
+      fillRatioSum += order.requestedNotionalUsdc > 0
+        ? order.filledNotionalUsdc / order.requestedNotionalUsdc
+        : 0;
+
+      const reasonCodes = Array.isArray(order.metadata.reasonCodes) ? order.metadata.reasonCodes : [];
+      for (const code of reasonCodes) {
+        const key = String(code);
+        reasonCodeCounts[key] = (reasonCodeCounts[key] ?? 0) + 1;
+      }
+      const warnings = Array.isArray(order.metadata.warnings) ? order.metadata.warnings : [];
+      for (const warning of warnings) {
+        const key = String(warning);
+        warningCounts[key] = (warningCounts[key] ?? 0) + 1;
+      }
+    }
+
+    const orderCount = orders.length;
+    const notionalFillRate = requestedNotionalUsdc > 0 ? filledNotionalUsdc / requestedNotionalUsdc : 0;
+    return {
+      generatedAt: nowIso(),
+      sessionId: args?.sessionId,
+      since: args?.since,
+      orderCount,
+      statusCounts,
+      requestedNotionalUsdc: Number(requestedNotionalUsdc.toFixed(6)),
+      filledNotionalUsdc: Number(filledNotionalUsdc.toFixed(6)),
+      missedNotionalUsdc: Number(missedNotionalUsdc.toFixed(6)),
+      notionalFillRate: Number(notionalFillRate.toFixed(6)),
+      averageOrderFillRatio: Number((orderCount > 0 ? fillRatioSum / orderCount : 0).toFixed(6)),
+      fullFillCount: statusCounts.filled ?? 0,
+      partialFillCount: statusCounts.partial_filled ?? 0,
+      missedCount: statusCounts.missed ?? 0,
+      rejectedCount: statusCounts.rejected ?? 0,
+      expiredCount: statusCounts.expired ?? 0,
+      reasonCodeCounts,
+      warningCounts,
+      recentOrders: orders.slice(0, Math.max(1, Math.min(100, args?.limit ?? 20)))
+    };
   }
 
   recordPaperTradingFill(input: StoredPaperTradingFillInput): StoredPaperTradingFillRecord {
