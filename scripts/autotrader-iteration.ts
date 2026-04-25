@@ -84,7 +84,9 @@ function renderSummary(result: Awaited<ReturnType<typeof runAutoTradingIteration
     `Session: ${result.session.sessionId}`,
     `Mode: ${result.summary.mode}`,
     `Risk: ${result.summary.riskProfile}`,
-    `Budget: ${result.summary.proposedBudgetUsdc.toFixed(2)} proposed / ${result.summary.budgetUsdc.toFixed(2)} total`,
+    `Budget: $${result.summary.spentUsdc.toFixed(2)} spent, $${result.summary.remainingBudgetUsdc.toFixed(2)} remaining / $${result.summary.budgetUsdc.toFixed(2)} total`,
+    `Paper PnL: $${result.summary.unrealizedPnlUsdc.toFixed(2)} unrealized across ${result.summary.openPositions} open positions`,
+    `This iteration: $${result.summary.proposedBudgetUsdc.toFixed(2)} proposed`,
     `Orders: ${result.summary.proposedOrders}; research: ${result.summary.researchRequired}; blocked: ${result.summary.blocked}`,
     `Next run: ${result.summary.nextRunAt ?? "unknown"}`,
     ...(lines.length > 0 ? ["Top decisions:", ...lines] : ["Top decisions: none"])

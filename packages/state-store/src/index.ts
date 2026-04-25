@@ -256,6 +256,73 @@ export interface StoredAutoTradingDecisionRecord {
   createdAt: string;
 }
 
+export interface StoredPaperTradingFillInput {
+  fillId?: string;
+  sessionId: string;
+  iterationId?: string;
+  decisionId?: string;
+  marketKey: string;
+  title?: string;
+  side?: "buy_yes" | "sell_yes";
+  price: number;
+  shares: number;
+  costUsdc: number;
+  filledAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StoredPaperTradingFillRecord {
+  fillId: string;
+  sessionId: string;
+  iterationId?: string;
+  decisionId?: string;
+  marketKey: string;
+  title?: string;
+  side: string;
+  price: number;
+  shares: number;
+  costUsdc: number;
+  filledAt: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface StoredPaperTradingPositionRecord {
+  positionId: string;
+  sessionId: string;
+  marketKey: string;
+  title?: string;
+  status: "open" | "closed";
+  shares: number;
+  averagePrice: number;
+  costUsdc: number;
+  currentPrice?: number;
+  currentValueUsdc?: number;
+  unrealizedPnlUsdc?: number;
+  unrealizedPnlPct?: number;
+  openedAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface StoredPaperTradingLedgerSummary {
+  sessionId: string;
+  generatedAt: string;
+  budgetUsdc: number;
+  spentUsdc: number;
+  remainingBudgetUsdc: number;
+  openPositionCount: number;
+  positionValueUsdc: number;
+  unrealizedPnlUsdc: number;
+  portfolioValueUsdc: number;
+}
+
+export interface StoredPaperTradingLedger {
+  summary: StoredPaperTradingLedgerSummary;
+  positions: StoredPaperTradingPositionRecord[];
+  fills: StoredPaperTradingFillRecord[];
+}
+
 export interface StoredUniverseRunInput {
   runId?: string;
   startedAt?: string;
@@ -818,6 +885,46 @@ function autoTradingDecisionRowToRecord(row: unknown): StoredAutoTradingDecision
   } satisfies StoredAutoTradingDecisionRecord;
 }
 
+function paperTradingFillRowToRecord(row: unknown): StoredPaperTradingFillRecord {
+  const record = rowRecord(row);
+  return {
+    fillId: String(record.fill_id ?? ""),
+    sessionId: String(record.session_id ?? ""),
+    iterationId: typeof record.iteration_id === "string" ? record.iteration_id : undefined,
+    decisionId: typeof record.decision_id === "string" ? record.decision_id : undefined,
+    marketKey: String(record.market_key ?? ""),
+    title: typeof record.title === "string" ? record.title : undefined,
+    side: String(record.side ?? "buy_yes"),
+    price: asNumber(record.price) ?? 0,
+    shares: asNumber(record.shares) ?? 0,
+    costUsdc: asNumber(record.cost_usdc) ?? 0,
+    filledAt: String(record.filled_at ?? ""),
+    metadata: parseJson<Record<string, unknown>>(record.metadata_json, {})
+  } satisfies StoredPaperTradingFillRecord;
+}
+
+function paperTradingPositionRowToRecord(row: unknown): StoredPaperTradingPositionRecord {
+  const record = rowRecord(row);
+  return {
+    positionId: String(record.position_id ?? ""),
+    sessionId: String(record.session_id ?? ""),
+    marketKey: String(record.market_key ?? ""),
+    title: typeof record.title === "string" ? record.title : undefined,
+    status: String(record.status ?? "open") === "closed" ? "closed" : "open",
+    shares: asNumber(record.shares) ?? 0,
+    averagePrice: asNumber(record.average_price) ?? 0,
+    costUsdc: asNumber(record.cost_usdc) ?? 0,
+    currentPrice: asNumber(record.current_price),
+    currentValueUsdc: asNumber(record.current_value_usdc),
+    unrealizedPnlUsdc: asNumber(record.unrealized_pnl_usdc),
+    unrealizedPnlPct: asNumber(record.unrealized_pnl_pct),
+    openedAt: String(record.opened_at ?? ""),
+    updatedAt: String(record.updated_at ?? ""),
+    closedAt: typeof record.closed_at === "string" ? record.closed_at : undefined,
+    metadata: parseJson<Record<string, unknown>>(record.metadata_json, {})
+  } satisfies StoredPaperTradingPositionRecord;
+}
+
 const UNIVERSE_SORT_SQL: Record<string, string> = {
   research_priority_desc: "research_priority_score DESC, tradability_score DESC, liquidity_usd DESC",
   trade_opportunity_desc: "trade_opportunity_score DESC, tradability_score DESC",
@@ -1337,6 +1444,46 @@ export class StateStore {
       );
       CREATE INDEX IF NOT EXISTS idx_auto_trading_decisions_session_time ON auto_trading_decisions(session_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_auto_trading_decisions_market_time ON auto_trading_decisions(market_key, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS paper_trading_fills (
+        fill_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        iteration_id TEXT,
+        decision_id TEXT UNIQUE,
+        market_key TEXT NOT NULL,
+        title TEXT,
+        side TEXT NOT NULL,
+        price REAL NOT NULL,
+        shares REAL NOT NULL,
+        cost_usdc REAL NOT NULL,
+        filled_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY(session_id) REFERENCES auto_trading_sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_paper_trading_fills_session_time ON paper_trading_fills(session_id, filled_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_paper_trading_fills_market_time ON paper_trading_fills(market_key, filled_at DESC);
+
+      CREATE TABLE IF NOT EXISTS paper_trading_positions (
+        position_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        market_key TEXT NOT NULL,
+        title TEXT,
+        status TEXT NOT NULL,
+        shares REAL NOT NULL,
+        average_price REAL NOT NULL,
+        cost_usdc REAL NOT NULL,
+        current_price REAL,
+        current_value_usdc REAL,
+        unrealized_pnl_usdc REAL,
+        unrealized_pnl_pct REAL,
+        opened_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        UNIQUE(session_id, market_key),
+        FOREIGN KEY(session_id) REFERENCES auto_trading_sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_paper_trading_positions_session_status ON paper_trading_positions(session_id, status, updated_at DESC);
 
       CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2863,6 +3010,217 @@ export class StateStore {
     return rows.map((row) => autoTradingDecisionRowToRecord(row));
   }
 
+  recordPaperTradingFill(input: StoredPaperTradingFillInput): StoredPaperTradingFillRecord {
+    if (input.decisionId) {
+      const existing = this.db.prepare(`
+        SELECT *
+        FROM paper_trading_fills
+        WHERE decision_id = ?
+        LIMIT 1
+      `).get(input.decisionId);
+      if (existing) {
+        return paperTradingFillRowToRecord(existing);
+      }
+    }
+
+    const fillId = input.fillId ?? randomUUID();
+    const filledAt = input.filledAt ?? nowIso();
+    const side = input.side ?? "buy_yes";
+    const price = Math.max(0, input.price);
+    const shares = Math.max(0, input.shares);
+    const costUsdc = Math.max(0, input.costUsdc);
+    this.db.prepare(`
+      INSERT INTO paper_trading_fills (
+        fill_id, session_id, iteration_id, decision_id, market_key, title, side, price,
+        shares, cost_usdc, filled_at, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      fillId,
+      input.sessionId,
+      input.iterationId ?? null,
+      input.decisionId ?? null,
+      input.marketKey,
+      input.title ?? null,
+      side,
+      price,
+      shares,
+      costUsdc,
+      filledAt,
+      jsonString(input.metadata ?? {}, {})
+    );
+
+    if (side === "buy_yes" && shares > 0 && costUsdc > 0) {
+      const existingPosition = this.db.prepare(`
+        SELECT *
+        FROM paper_trading_positions
+        WHERE session_id = ? AND market_key = ?
+        LIMIT 1
+      `).get(input.sessionId, input.marketKey);
+      if (existingPosition) {
+        const existing = paperTradingPositionRowToRecord(existingPosition);
+        const nextShares = existing.shares + shares;
+        const nextCost = existing.costUsdc + costUsdc;
+        const nextAverage = nextCost / Math.max(0.000001, nextShares);
+        const mergedMetadata = { ...existing.metadata, ...(input.metadata ?? {}) };
+        this.db.prepare(`
+          UPDATE paper_trading_positions
+          SET title = COALESCE(?, title),
+              status = 'open',
+              shares = ?,
+              average_price = ?,
+              cost_usdc = ?,
+              updated_at = ?,
+              metadata_json = ?
+          WHERE position_id = ?
+        `).run(
+          input.title ?? null,
+          nextShares,
+          nextAverage,
+          nextCost,
+          filledAt,
+          jsonString(mergedMetadata, {}),
+          existing.positionId
+        );
+      } else {
+        this.db.prepare(`
+          INSERT INTO paper_trading_positions (
+            position_id, session_id, market_key, title, status, shares, average_price,
+            cost_usdc, opened_at, updated_at, metadata_json
+          ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
+        `).run(
+          randomUUID(),
+          input.sessionId,
+          input.marketKey,
+          input.title ?? null,
+          shares,
+          costUsdc / Math.max(0.000001, shares),
+          costUsdc,
+          filledAt,
+          filledAt,
+          jsonString(input.metadata ?? {}, {})
+        );
+      }
+    }
+
+    const row = this.db.prepare(`
+      SELECT *
+      FROM paper_trading_fills
+      WHERE fill_id = ?
+      LIMIT 1
+    `).get(fillId);
+    return paperTradingFillRowToRecord(row);
+  }
+
+  markPaperTradingPositions(sessionId: string, marks?: Record<string, number>, markedAt = nowIso()): StoredPaperTradingPositionRecord[] {
+    const positions = this.listPaperTradingPositions({ sessionId, status: "open", limit: 500 });
+    const latestRun = this.getLatestUniverseRun();
+    for (const position of positions) {
+      const explicitMark = marks?.[position.marketKey];
+      const row = explicitMark === undefined && latestRun?.runId
+        ? this.db.prepare(`
+          SELECT best_bid, midpoint, implied_prob, last_trade_price
+          FROM universe_markets
+          WHERE run_id = ? AND market_key = ?
+          LIMIT 1
+        `).get(String(latestRun.runId), position.marketKey)
+        : undefined;
+      const record = rowRecord(row);
+      const currentPrice = explicitMark ??
+        asNumber(record.best_bid) ??
+        asNumber(record.midpoint) ??
+        asNumber(record.implied_prob) ??
+        asNumber(record.last_trade_price);
+      if (currentPrice === undefined) {
+        continue;
+      }
+      const boundedPrice = Math.max(0, Math.min(1, currentPrice));
+      const currentValueUsdc = position.shares * boundedPrice;
+      const unrealizedPnlUsdc = currentValueUsdc - position.costUsdc;
+      const unrealizedPnlPct = (unrealizedPnlUsdc / Math.max(0.000001, position.costUsdc)) * 100;
+      this.db.prepare(`
+        UPDATE paper_trading_positions
+        SET current_price = ?,
+            current_value_usdc = ?,
+            unrealized_pnl_usdc = ?,
+            unrealized_pnl_pct = ?,
+            updated_at = ?
+        WHERE position_id = ?
+      `).run(
+        boundedPrice,
+        currentValueUsdc,
+        unrealizedPnlUsdc,
+        unrealizedPnlPct,
+        markedAt,
+        position.positionId
+      );
+    }
+    return this.listPaperTradingPositions({ sessionId, status: "open", limit: 500 });
+  }
+
+  listPaperTradingPositions(args: { sessionId: string; status?: "open" | "closed"; limit?: number }): StoredPaperTradingPositionRecord[] {
+    const limit = Math.max(1, Math.min(1000, args.limit ?? 100));
+    const where = ["session_id = ?"];
+    const params: SqlPrimitive[] = [args.sessionId];
+    if (args.status) {
+      where.push("status = ?");
+      params.push(args.status);
+    }
+    params.push(limit);
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM paper_trading_positions
+      WHERE ${where.join(" AND ")}
+      ORDER BY updated_at DESC, position_id DESC
+      LIMIT ?
+    `).all(...params);
+    return rows.map((row) => paperTradingPositionRowToRecord(row));
+  }
+
+  listPaperTradingFills(args: { sessionId: string; limit?: number }): StoredPaperTradingFillRecord[] {
+    const limit = Math.max(1, Math.min(1000, args.limit ?? 100));
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM paper_trading_fills
+      WHERE session_id = ?
+      ORDER BY filled_at DESC, fill_id DESC
+      LIMIT ?
+    `).all(args.sessionId, limit);
+    return rows.map((row) => paperTradingFillRowToRecord(row));
+  }
+
+  getPaperTradingLedger(sessionId: string): StoredPaperTradingLedger {
+    const session = this.getAutoTradingSession(sessionId);
+    const positions = this.listPaperTradingPositions({ sessionId, limit: 1000 });
+    const fills = this.listPaperTradingFills({ sessionId, limit: 1000 });
+    const spentUsdc = fills.reduce((sum, fill) => sum + fill.costUsdc, 0);
+    const openPositions = positions.filter((position) => position.status === "open");
+    const positionValueUsdc = openPositions.reduce(
+      (sum, position) => sum + (position.currentValueUsdc ?? position.costUsdc),
+      0
+    );
+    const unrealizedPnlUsdc = openPositions.reduce(
+      (sum, position) => sum + (position.unrealizedPnlUsdc ?? 0),
+      0
+    );
+    const budgetUsdc = session?.budgetUsdc ?? 0;
+    const remainingBudgetUsdc = Math.max(0, budgetUsdc - spentUsdc);
+    return {
+      summary: {
+        sessionId,
+        generatedAt: nowIso(),
+        budgetUsdc: Number(budgetUsdc.toFixed(6)),
+        spentUsdc: Number(spentUsdc.toFixed(6)),
+        remainingBudgetUsdc: Number(remainingBudgetUsdc.toFixed(6)),
+        openPositionCount: openPositions.length,
+        positionValueUsdc: Number(positionValueUsdc.toFixed(6)),
+        unrealizedPnlUsdc: Number(unrealizedPnlUsdc.toFixed(6)),
+        portfolioValueUsdc: Number((remainingBudgetUsdc + positionValueUsdc).toFixed(6))
+      },
+      positions,
+      fills
+    };
+  }
+
   recordThesisLink(input: StoredThesisLinkInput): number {
     const marketKey = this.resolveMarketKey(input);
     const createdAt = input.createdAt ?? nowIso();
@@ -3330,7 +3688,9 @@ export class StateStore {
       automationRuns: this.preparedCount("automation_runs"),
       agentRuns: this.preparedCount("agent_runs"),
       autoTradingSessions: this.preparedCount("auto_trading_sessions"),
-      autoTradingDecisions: this.preparedCount("auto_trading_decisions")
+      autoTradingDecisions: this.preparedCount("auto_trading_decisions"),
+      paperTradingFills: this.preparedCount("paper_trading_fills"),
+      paperTradingPositions: this.preparedCount("paper_trading_positions")
     } satisfies Record<string, number>;
 
     const recentResearchRuns = this.db.prepare(`

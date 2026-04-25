@@ -4,6 +4,7 @@ import type {
   StateStore,
   StoredAutoTradingDecisionRecord,
   StoredAutoTradingSessionRecord,
+  StoredPaperTradingLedger,
   StoredUniverseMarketInput
 } from "../../state-store/src/index.js";
 
@@ -72,6 +73,11 @@ export interface AutoTradingIterationResult {
     mode: AutoTradingMode;
     riskProfile: AutoTradingRiskProfile;
     budgetUsdc: number;
+    spentUsdc: number;
+    positionValueUsdc: number;
+    unrealizedPnlUsdc: number;
+    portfolioValueUsdc: number;
+    openPositions: number;
     proposedBudgetUsdc: number;
     remainingBudgetUsdc: number;
     eligibleMarkets: number;
@@ -81,6 +87,7 @@ export interface AutoTradingIterationResult {
     nextRunAt?: string;
   };
   decisions: StoredAutoTradingDecisionRecord[];
+  ledger: StoredPaperTradingLedger;
   candidates: AutoTradingDecision[];
 }
 
@@ -542,6 +549,11 @@ function eventIdentity(market: Record<string, unknown>): string {
   return marketIdentity(market);
 }
 
+function positionEventIdentity(position: { marketKey: string; metadata: Record<string, unknown> }): string {
+  const eventKey = position.metadata.eventKey;
+  return typeof eventKey === "string" && eventKey.trim() ? eventKey : `marketKey:${position.marketKey}`;
+}
+
 function marketIdentity(market: Record<string, unknown>): string {
   for (const key of ["marketKey", "conditionId", "slug", "title"]) {
     const value = market[key];
@@ -702,6 +714,8 @@ export function runAutoTradingIteration(
     ? normalizeAutoTradingMandate(existing.mandate as unknown as AutoTradingMandateInput)
     : normalizeAutoTradingMandate(args.mandate as AutoTradingMandateInput);
   const session = existing ?? createSession(store, mandate, now);
+  store.markPaperTradingPositions(session.sessionId, undefined, now.toISOString());
+  let ledger = store.getPaperTradingLedger(session.sessionId);
   const iterationId = randomUUID();
   const latestRun = store.getLatestUniverseRun();
   const runId = typeof latestRun?.runId === "string" ? latestRun.runId : "";
@@ -739,8 +753,13 @@ export function runAutoTradingIteration(
         mode: mandate.mode,
         riskProfile: mandate.riskProfile,
         budgetUsdc: mandate.budgetUsdc,
+        spentUsdc: ledger.summary.spentUsdc,
+        positionValueUsdc: ledger.summary.positionValueUsdc,
+        unrealizedPnlUsdc: ledger.summary.unrealizedPnlUsdc,
+        portfolioValueUsdc: ledger.summary.portfolioValueUsdc,
+        openPositions: ledger.summary.openPositionCount,
         proposedBudgetUsdc: 0,
-        remainingBudgetUsdc: mandate.budgetUsdc,
+        remainingBudgetUsdc: ledger.summary.remainingBudgetUsdc,
         eligibleMarkets: 0,
         proposedOrders: 0,
         researchRequired: 0,
@@ -748,6 +767,7 @@ export function runAutoTradingIteration(
         nextRunAt: addMinutes(now, mandate.heartbeatMinutes)
       },
       decisions: stored,
+      ledger,
       candidates: [decision]
     };
   }
@@ -774,9 +794,14 @@ export function runAutoTradingIteration(
     }).markets
   ]);
 
-  let remainingBudget = mandate.budgetUsdc;
+  let remainingBudget = ledger.summary.remainingBudgetUsdc;
   const eventExposureUsdc = new Map<string, number>();
   const eventPositionCount = new Map<string, number>();
+  for (const position of ledger.positions.filter((entry) => entry.status === "open")) {
+    const eventKey = positionEventIdentity(position);
+    eventExposureUsdc.set(eventKey, (eventExposureUsdc.get(eventKey) ?? 0) + position.costUsdc);
+    eventPositionCount.set(eventKey, (eventPositionCount.get(eventKey) ?? 0) + 1);
+  }
   const decisions: AutoTradingDecision[] = rawMarkets
     .map((market) => {
       const blockers = marketBlockers(market, mandate, now);
@@ -897,6 +922,42 @@ export function runAutoTradingIteration(
     }))
     : [];
 
+  if (persist && mandate.mode === "paper") {
+    cappedDecisions.forEach((decision, index) => {
+      const storedDecision = stored[index];
+      if (
+        decision.action !== "paper_buy_yes" ||
+        !decision.marketKey ||
+        !decision.targetPrice ||
+        !decision.shares ||
+        !decision.allocatedBudgetUsdc ||
+        !storedDecision
+      ) {
+        return;
+      }
+      store.recordPaperTradingFill({
+        sessionId: session.sessionId,
+        iterationId,
+        decisionId: storedDecision.decisionId,
+        marketKey: decision.marketKey,
+        title: decision.title,
+        side: "buy_yes",
+        price: decision.targetPrice,
+        shares: decision.shares,
+        costUsdc: decision.allocatedBudgetUsdc,
+        filledAt: now.toISOString(),
+        metadata: {
+          eventKey: eventIdentity(decision.market),
+          tokenId: decision.tokenId,
+          score: decision.score,
+          mode: mandate.mode
+        }
+      });
+    });
+    store.markPaperTradingPositions(session.sessionId, undefined, now.toISOString());
+    ledger = store.getPaperTradingLedger(session.sessionId);
+  }
+
   const proposedBudgetUsdc = cappedDecisions.reduce((sum, decision) => sum + (decision.allocatedBudgetUsdc ?? 0), 0);
   const nextRunAt = cappedDecisions
     .map((decision) => decision.nextCheckAt)
@@ -914,8 +975,13 @@ export function runAutoTradingIteration(
       mode: mandate.mode,
       riskProfile: mandate.riskProfile,
       budgetUsdc: mandate.budgetUsdc,
+      spentUsdc: ledger.summary.spentUsdc,
+      positionValueUsdc: ledger.summary.positionValueUsdc,
+      unrealizedPnlUsdc: ledger.summary.unrealizedPnlUsdc,
+      portfolioValueUsdc: ledger.summary.portfolioValueUsdc,
+      openPositions: ledger.summary.openPositionCount,
       proposedBudgetUsdc: Number(proposedBudgetUsdc.toFixed(4)),
-      remainingBudgetUsdc: Number(Math.max(0, mandate.budgetUsdc - proposedBudgetUsdc).toFixed(4)),
+      remainingBudgetUsdc: ledger.summary.remainingBudgetUsdc,
       eligibleMarkets: cappedDecisions.filter((decision) => decision.status !== "blocked").length,
       proposedOrders: cappedDecisions.filter((decision) => decision.action === "paper_buy_yes").length,
       researchRequired: cappedDecisions.filter((decision) => decision.action === "research_required").length,
@@ -923,6 +989,7 @@ export function runAutoTradingIteration(
       nextRunAt
     },
     decisions: stored,
+    ledger,
     candidates: cappedDecisions
   };
 }

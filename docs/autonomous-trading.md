@@ -1,6 +1,6 @@
 # autonomous trading
 
-The first autonomous trading implementation is a paper-mode control plane. It turns a user mandate into persisted session state, timeframe-aware candidate filtering, paper order proposals, and follow-up scheduling.
+The first autonomous trading implementation is a paper-mode control plane. It turns a user mandate into persisted session state, timeframe-aware candidate filtering, paper fills, marked paper positions, and follow-up scheduling.
 
 It does not submit live orders. Live execution remains gated behind `preview_limit_order`, `preview_marketable_order`, and `submit_previewed_order`.
 
@@ -43,8 +43,9 @@ Each iteration:
 2. Filters markets by mandate timeframe, end date, liquidity, spread, ambiguity, tradability, and risk profile.
 3. Scores remaining candidates using trade-opportunity, research-priority, tradability, catalyst, horizon fit, and risk penalty.
 4. Produces paper `buy yes` proposals for the strongest candidates.
-5. Records blocked, research-required, monitor, and proposed decisions in SQLite.
-6. Emits a next-run timestamp for heartbeat or per-market scheduling.
+5. Persists idempotent paper fills and aggregates open positions by session/market.
+6. Marks open paper positions from the latest persisted universe prices.
+7. Emits a next-run timestamp for heartbeat or per-market scheduling.
 
 ## commands
 
@@ -96,14 +97,13 @@ The simulation is deterministic and intentionally conservative as a test harness
 - `run_auto_trading_iteration`
 - `get_auto_trading_session`
 
-These tools persist session and decision records. They return compact decision payloads by default so autonomous agents do not ingest raw market snapshots unless explicitly requested with `compact: false`. They are safe for paper experimentation because they do not call live order submission.
+These tools persist session, decision, paper-fill, and paper-position records. They return compact decision payloads by default so autonomous agents do not ingest raw market snapshots unless explicitly requested with `compact: false`. They are safe for paper experimentation because they do not call live order submission.
 
 ## live execution boundary
 
 Before live autonomy, add:
 
-- fill-aware budget ledger
-- realized/unrealized PnL and stop-loss enforcement
+- realized PnL and stop-loss enforcement
 - paper/live reconciliation reports
 - explicit transition from paper decisions to preview generation
 - kill switch and session pause/resume tools

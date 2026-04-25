@@ -131,6 +131,125 @@ test("auto-trader creates paper session and filters markets by mandate timeframe
   });
 });
 
+test("auto-trader persists paper fills and spends from ledger on later iterations", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const market = (runId: string, input: {
+      key: string;
+      title: string;
+      eventSlug: string;
+      price: number;
+      tradeScore: number;
+    }) => ({
+      runId,
+      marketKey: input.key,
+      conditionId: input.key.replace("condition:", ""),
+      slug: input.key.replace("condition:", ""),
+      eventSlug: input.eventSlug,
+      eventTitle: input.eventSlug,
+      title: input.title,
+      category: "sports",
+      tags: ["sports"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [input.price, Number((1 - input.price).toFixed(4))],
+      clobTokenIds: [`${input.key}:yes`, `${input.key}:no`],
+      yesTokenId: `${input.key}:yes`,
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 40_000,
+      volume24hUsd: 90_000,
+      impliedProb: input.price,
+      bestBid: input.price,
+      bestAsk: Number(Math.min(0.99, input.price + 0.02).toFixed(4)),
+      midpoint: input.price,
+      spreadCents: 2,
+      categoryGroup: "sports",
+      structuralType: "live-sports",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: 82,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 82,
+      tradeOpportunityScore: input.tradeScore,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: {}
+    });
+
+    const runId1 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId1, [
+      market(runId1, { key: "condition:first", title: "First event", eventSlug: "event-one", price: 0.3, tradeScore: 92 })
+    ]);
+
+    const first = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 6,
+        maxEventExposureUsdc: 6
+      }
+    });
+
+    assert.equal(first.summary.proposedOrders, 1);
+    assert.equal(first.summary.spentUsdc, 6);
+    assert.equal(first.summary.remainingBudgetUsdc, 4);
+    assert.equal(first.ledger.fills.length, 1);
+    assert.equal(first.ledger.positions.length, 1);
+
+    const later = new Date(now.getTime() + 60 * 60 * 1000);
+    const runId2 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: later.toISOString(),
+      completedAt: later.toISOString()
+    });
+    store.recordUniverseMarkets(runId2, [
+      market(runId2, { key: "condition:first", title: "First event", eventSlug: "event-one", price: 0.4, tradeScore: 93 }),
+      market(runId2, { key: "condition:second", title: "Second event", eventSlug: "event-two", price: 0.25, tradeScore: 91 })
+    ]);
+
+    const second = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: later,
+      limit: 4
+    });
+
+    assert.equal(second.candidates.find((candidate) => candidate.marketKey === "condition:first")?.action, "monitor");
+    assert.ok(second.candidates.find((candidate) => candidate.marketKey === "condition:first")?.blockers.includes("event_position_cap_reached"));
+    assert.equal(second.candidates.find((candidate) => candidate.marketKey === "condition:second")?.action, "paper_buy_yes");
+    assert.equal(second.summary.spentUsdc, 10);
+    assert.equal(second.summary.remainingBudgetUsdc, 0);
+    assert.equal(second.ledger.fills.length, 2);
+    assert.equal(second.ledger.summary.openPositionCount, 2);
+    assert.ok((second.ledger.positions.find((position) => position.marketKey === "condition:first")?.unrealizedPnlUsdc ?? 0) > 0);
+  });
+});
+
 test("auto-trader includes ending-soon markets beyond the top opportunity pool", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");
