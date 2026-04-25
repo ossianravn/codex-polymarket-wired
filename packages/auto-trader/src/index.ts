@@ -15,9 +15,14 @@ export {
   type IndependentForecastArtifact
 } from "./forecast-writer.js";
 export {
+  buildResearchEvidenceTemplate,
   runResearchRequestWorker,
+  type ResearchEvidenceBundleTemplate,
+  type ResearchEvidenceTemplateInput,
+  type ResearchEvidenceTemplateResult,
   type ResearchEvidenceBundle,
   type ResearchEvidenceItem,
+  type ResearchRequestEvidenceTemplate,
   type ResearchRequestWorkerInput,
   type ResearchRequestWorkerResult
 } from "./research-request-worker.js";

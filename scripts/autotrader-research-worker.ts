@@ -1,7 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import process from "node:process";
 
 import {
+  buildResearchEvidenceTemplate,
   runResearchRequestWorker,
   type ResearchEvidenceBundle
 } from "../packages/auto-trader/src/index.js";
@@ -13,6 +14,8 @@ interface CliOptions {
   sessionId?: string;
   limit?: number;
   evidenceFile?: string;
+  template: boolean;
+  templateFile?: string;
   json: boolean;
   noMark: boolean;
 }
@@ -42,6 +45,8 @@ function parseCliArgs(): CliOptions {
     sessionId: readArg("session-id") ?? process.env.AUTOTRADER_SESSION_ID,
     limit: readNumberArg("limit"),
     evidenceFile: readArg("evidence-file") ?? process.env.AUTOTRADER_RESEARCH_EVIDENCE_FILE,
+    template: process.argv.includes("--template"),
+    templateFile: readArg("template-file") ?? readArg("template-out") ?? process.env.AUTOTRADER_RESEARCH_TEMPLATE_FILE,
     json: process.argv.includes("--json"),
     noMark: process.argv.includes("--no-mark")
   };
@@ -77,13 +82,43 @@ function renderText(result: ReturnType<typeof runResearchRequestWorker>): string
   ].join("\n");
 }
 
+function renderTemplateText(result: ReturnType<typeof buildResearchEvidenceTemplate>): string {
+  const lines = result.templates.slice(0, 10).map((template) =>
+    `- [${template.priority}] ${template.marketKey}: ${template.researchQuestion}`
+  );
+  return [
+    `Research evidence template: ${result.generatedAt}`,
+    `Scanned decisions: ${result.scannedDecisions}`,
+    `Pending requests: ${result.pendingRequests}`,
+    `Skipped already completed: ${result.skippedAlreadyCompleted}`,
+    `Templates: ${result.templates.length}`,
+    ...(lines.length > 0 ? ["Requests:", ...lines] : ["Requests: none"])
+  ].join("\n");
+}
+
 async function main(): Promise<void> {
   const options = parseCliArgs();
   const config = loadRuntimeConfig();
   const dbPath = options.dbPath ?? config.stateDbPath;
-  const evidenceBundles = await loadEvidenceBundles(options.evidenceFile);
   const store = openStateStore(dbPath);
   try {
+    if (options.template) {
+      const result = buildResearchEvidenceTemplate(store, {
+        sessionId: options.sessionId,
+        limit: options.limit
+      });
+      if (options.templateFile) {
+        await writeFile(options.templateFile, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+      }
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(renderTemplateText(result));
+      }
+      return;
+    }
+
+    const evidenceBundles = await loadEvidenceBundles(options.evidenceFile);
     const result = runResearchRequestWorker(store, {
       sessionId: options.sessionId,
       limit: options.limit,
@@ -104,4 +139,3 @@ main().catch((error) => {
   console.error("autotrader-research-worker error:", error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
-

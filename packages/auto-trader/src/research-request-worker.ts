@@ -43,6 +43,67 @@ export interface ResearchRequestWorkerInput {
   markDecisionPayload?: boolean;
 }
 
+export interface ResearchEvidenceBundleTemplate {
+  marketKey: string;
+  title?: string;
+  question: string;
+  thesis: string;
+  fairValueLow: number | null;
+  fairValueBase: number | null;
+  fairValueHigh: number | null;
+  supportsYes: Array<{
+    source: string;
+    title: string;
+    url: string;
+    summary: string;
+    stance: "supports_yes";
+    confidence: string;
+  }>;
+  supportsNo: Array<{
+    source: string;
+    title: string;
+    url: string;
+    summary: string;
+    stance: "supports_no";
+    confidence: string;
+  }>;
+  openQuestions: string[];
+  providers: string[];
+  notes: string;
+  completedAt: string | null;
+  automationName: string;
+}
+
+export interface ResearchRequestEvidenceTemplate {
+  decisionId: string;
+  sessionId: string;
+  marketKey: string;
+  title?: string;
+  score?: number;
+  dueAt: string;
+  priority: "high" | "medium";
+  reasonCodes: string[];
+  forecastBlockers: string[];
+  requiredArtifact: AutoTradingResearchRequest["requiredArtifact"];
+  marketContext: AutoTradingResearchRequest["marketContext"];
+  researchQuestion: string;
+  evidenceBundleTemplate: ResearchEvidenceBundleTemplate;
+}
+
+export interface ResearchEvidenceTemplateInput {
+  sessionId?: string;
+  limit?: number;
+  now?: Date;
+}
+
+export interface ResearchEvidenceTemplateResult {
+  generatedAt: string;
+  scannedDecisions: number;
+  pendingRequests: number;
+  skippedAlreadyCompleted: number;
+  templates: ResearchRequestEvidenceTemplate[];
+}
+
 export interface ResearchRequestWorkerResult {
   generatedAt: string;
   scannedDecisions: number;
@@ -191,6 +252,100 @@ function sessionsToScan(store: StateStore, sessionId?: string): StoredAutoTradin
     return session ? [session] : [];
   }
   return store.listAutoTradingSessions({ status: "active", limit: 5 });
+}
+
+function researchEvidenceBundleTemplate(
+  request: AutoTradingResearchRequest,
+  decision: StoredAutoTradingDecisionRecord
+): ResearchEvidenceBundleTemplate {
+  const title = request.title ?? decision.title;
+  return {
+    marketKey: request.marketKey,
+    title,
+    question: request.researchQuestion,
+    thesis: "TODO: State the independent thesis using only external evidence and source reasoning.",
+    fairValueLow: null,
+    fairValueBase: null,
+    fairValueHigh: null,
+    supportsYes: [{
+      source: "TODO: Non-venue source name",
+      title: "TODO: Evidence title",
+      url: "TODO: Source URL if available",
+      summary: "TODO: Why this supports YES.",
+      stance: "supports_yes",
+      confidence: "TODO: low | medium | high"
+    }],
+    supportsNo: [{
+      source: "TODO: Non-venue source name",
+      title: "TODO: Counter-evidence title",
+      url: "TODO: Source URL if available",
+      summary: "TODO: Why this supports NO or weakens YES.",
+      stance: "supports_no",
+      confidence: "TODO: low | medium | high"
+    }],
+    openQuestions: [
+      "TODO: List unresolved uncertainties that could move fair value."
+    ],
+    providers: [
+      "TODO: Research provider, model, skill, or analyst identifier"
+    ],
+    notes: [
+      "Use only external evidence and source reasoning; exclude trading-screen data from this bundle.",
+      "Fair values must be independent probabilities for YES as decimals between 0 and 1.",
+      "Use at least two evidence items total and at least one explicit counter-evidence item."
+    ].join(" "),
+    completedAt: null,
+    automationName: "autotrader-research-worker"
+  };
+}
+
+export function buildResearchEvidenceTemplate(
+  store: StateStore,
+  input: ResearchEvidenceTemplateInput = {}
+): ResearchEvidenceTemplateResult {
+  const now = input.now ?? new Date();
+  const limit = Math.max(1, Math.min(100, input.limit ?? 20));
+  const result: ResearchEvidenceTemplateResult = {
+    generatedAt: now.toISOString(),
+    scannedDecisions: 0,
+    pendingRequests: 0,
+    skippedAlreadyCompleted: 0,
+    templates: []
+  };
+
+  for (const session of sessionsToScan(store, input.sessionId)) {
+    const decisions = store.listAutoTradingDecisions({ sessionId: session.sessionId, limit });
+    result.scannedDecisions += decisions.length;
+    for (const decision of decisions) {
+      const request = decisionResearchRequest(decision);
+      if (!request?.marketKey) {
+        continue;
+      }
+      const existingStatus = decisionResearchStatus(decision);
+      if (existingStatus?.status === "recorded" && typeof existingStatus.researchRunId === "string") {
+        result.skippedAlreadyCompleted += 1;
+        continue;
+      }
+      result.pendingRequests += 1;
+      result.templates.push({
+        decisionId: decision.decisionId,
+        sessionId: decision.sessionId,
+        marketKey: request.marketKey,
+        title: request.title ?? decision.title,
+        score: decision.score,
+        dueAt: request.dueAt,
+        priority: request.priority,
+        reasonCodes: request.reasonCodes,
+        forecastBlockers: request.forecastBlockers,
+        requiredArtifact: request.requiredArtifact,
+        marketContext: request.marketContext,
+        researchQuestion: request.researchQuestion,
+        evidenceBundleTemplate: researchEvidenceBundleTemplate(request, decision)
+      });
+    }
+  }
+
+  return result;
 }
 
 export function runResearchRequestWorker(

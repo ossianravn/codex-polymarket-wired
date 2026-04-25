@@ -36,6 +36,7 @@
     "autotrader:paper-report:json": "tsx ./scripts/autotrader-paper-report.ts --json",
     "autotrader:research-worker": "tsx ./scripts/autotrader-research-worker.ts",
     "autotrader:research-worker:json": "tsx ./scripts/autotrader-research-worker.ts --json",
+    "autotrader:research-template": "tsx ./scripts/autotrader-research-worker.ts --template --json",
     "autotrader:session": "tsx ./scripts/autotrader-session.ts",
     "autotrader:session:json": "tsx ./scripts/autotrader-session.ts --json",
     "universe:once": "tsx ./scripts/universe-discovery.ts",
