@@ -4,7 +4,7 @@ import { normalizeAutoTradingMandate, type AutoTradingRiskProfile } from "../pac
 import { loadRuntimeConfig } from "../packages/polymarket-core/src/index.js";
 import { openStateStore } from "../packages/state-store/src/index.js";
 
-type Command = "create-paper" | "reset-paper-ledger";
+type Command = "create-paper" | "reset-paper-ledger" | "pause" | "resume" | "stop" | "kill";
 
 interface Options {
   command: Command;
@@ -19,10 +19,14 @@ interface Options {
   minLiquidityUsdc?: number;
   maxSpreadCents?: number;
   stopLossUsdc?: number;
+  maxDailyLossUsdc?: number;
   heartbeatMinutes?: number;
+  reason?: string;
   clearDecisions: boolean;
   json: boolean;
 }
+
+const COMMANDS = new Set<Command>(["create-paper", "reset-paper-ledger", "pause", "resume", "stop", "kill"]);
 
 function envString(name: string, fallback?: string): string | undefined {
   const value = process.env[name];
@@ -50,8 +54,8 @@ function consumedNext(argv: string[], index: number): boolean {
 
 function parseArgs(argv = process.argv.slice(2)): Options {
   const first = argv[0];
-  const command: Command = first === "reset-paper-ledger" ? "reset-paper-ledger" : "create-paper";
-  const startIndex = first === "create-paper" || first === "reset-paper-ledger" ? 1 : 0;
+  const command: Command = COMMANDS.has(first as Command) ? first as Command : "create-paper";
+  const startIndex = COMMANDS.has(first as Command) ? 1 : 0;
   const options: Options = {
     command,
     sessionId: envString("AUTOTRADER_SESSION_ID"),
@@ -65,7 +69,9 @@ function parseArgs(argv = process.argv.slice(2)): Options {
     minLiquidityUsdc: envNumber("AUTOTRADER_MIN_LIQUIDITY_USDC"),
     maxSpreadCents: envNumber("AUTOTRADER_MAX_SPREAD_CENTS"),
     stopLossUsdc: envNumber("AUTOTRADER_STOP_LOSS_USDC"),
+    maxDailyLossUsdc: envNumber("AUTOTRADER_MAX_DAILY_LOSS_USDC"),
     heartbeatMinutes: envNumber("AUTOTRADER_HEARTBEAT_MINUTES"),
+    reason: envString("AUTOTRADER_CONTROL_REASON"),
     clearDecisions: false,
     json: false
   };
@@ -105,8 +111,14 @@ function parseArgs(argv = process.argv.slice(2)): Options {
     } else if (arg === "--stop-loss-usdc" || arg.startsWith("--stop-loss-usdc=")) {
       options.stopLossUsdc = Number(readArgValue(argv, index));
       if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--max-daily-loss-usdc" || arg.startsWith("--max-daily-loss-usdc=")) {
+      options.maxDailyLossUsdc = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--heartbeat-minutes" || arg.startsWith("--heartbeat-minutes=")) {
       options.heartbeatMinutes = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--reason" || arg.startsWith("--reason=")) {
+      options.reason = readArgValue(argv, index);
       if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--clear-decisions") {
       options.clearDecisions = true;
@@ -137,6 +149,16 @@ function renderText(output: Record<string, unknown>): string {
       `Ends: ${session.endsAt}`
     ].join("\n");
   }
+  if (["pause", "resume", "stop", "kill"].includes(String(output.command))) {
+    const session = output.session as Record<string, unknown>;
+    return [
+      "Updated auto-trading session",
+      `Session: ${session.sessionId}`,
+      `Command: ${output.command}`,
+      `Status: ${session.status}`,
+      `Reason: ${output.reason ?? "none"}`
+    ].join("\n");
+  }
   const reset = output.reset as Record<string, unknown>;
   return [
     "Reset paper auto-trading ledger",
@@ -165,6 +187,7 @@ async function main(): Promise<void> {
         minLiquidityUsdc: options.minLiquidityUsdc,
         maxSpreadCents: options.maxSpreadCents,
         stopLossUsdc: options.stopLossUsdc,
+        maxDailyLossUsdc: options.maxDailyLossUsdc,
         heartbeatMinutes: options.heartbeatMinutes
       });
       const session = store.createAutoTradingSession({
@@ -188,6 +211,44 @@ async function main(): Promise<void> {
         session,
         ledger: store.getPaperTradingLedger(session.sessionId),
         paperExecutionReport: store.getPaperTradingExecutionReport({ sessionId: session.sessionId })
+      };
+    } else if (["pause", "resume", "stop", "kill"].includes(options.command)) {
+      if (!options.sessionId) {
+        throw new Error(`Missing required --session-id for ${options.command}.`);
+      }
+      const existing = store.getAutoTradingSession(options.sessionId);
+      if (!existing) {
+        throw new Error(`Unknown auto-trading session ${options.sessionId}.`);
+      }
+      const controlledAt = new Date().toISOString();
+      const status = options.command === "resume" ? "active" :
+        options.command === "pause" ? "paused" :
+          "stopped";
+      const metadata: Record<string, unknown> = {
+        controlCommand: options.command,
+        controlReason: options.reason ?? null,
+        controlledBy: "autotrader-session-cli",
+        controlledAt,
+        pauseControl: {
+          enabled: options.command === "pause",
+          updatedAt: controlledAt,
+          reason: options.reason ?? null
+        }
+      };
+      if (options.command === "kill" || options.command === "resume") {
+        metadata.killSwitch = {
+          enabled: options.command === "kill",
+          updatedAt: controlledAt,
+          reason: options.reason ?? null
+        };
+      }
+      store.updateAutoTradingSessionStatus(options.sessionId, status, metadata);
+      output = {
+        ok: true,
+        command: options.command,
+        reason: options.reason,
+        session: store.getAutoTradingSession(options.sessionId),
+        ledger: store.getPaperTradingLedger(options.sessionId)
       };
     } else {
       if (!options.sessionId) {

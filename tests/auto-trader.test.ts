@@ -1001,8 +1001,184 @@ test("auto-trader blocks new paper buys after session stop loss", async () => {
 
     assert.equal(second.summary.riskBlockedNewBuys, true);
     assert.equal(second.summary.proposedOrders, 0);
-    assert.ok(second.candidates.find((candidate) => candidate.marketKey === "condition:fresh")?.blockers.includes("session_stop_loss_reached"));
+    assert.equal(second.candidates[0]?.action, "skip");
+    assert.ok(second.candidates[0]?.blockers.includes("session_stop_loss_reached"));
+    assert.ok(second.summary.controlBlockers.includes("session_stop_loss_reached"));
+    assert.equal(store.getAutoTradingSession(first.session.sessionId)?.status, "stopped");
     assert.ok(second.summary.unrealizedPnlUsdc < -1);
+  });
+});
+
+test("auto-trader fail-closes when daily paper loss limit is breached", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId1 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId1, [{
+      runId: runId1,
+      marketKey: "condition:daily-loss",
+      conditionId: "daily-loss",
+      slug: "daily-loss",
+      eventSlug: "daily-loss-event",
+      eventTitle: "Daily loss event",
+      title: "Daily loss market",
+      category: "sports",
+      tags: ["sports"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.5, 0.5],
+      clobTokenIds: ["daily-loss-yes", "daily-loss-no"],
+      yesTokenId: "daily-loss-yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 20_000,
+      impliedProb: 0.5,
+      bestBid: 0.5,
+      bestAsk: 0.52,
+      midpoint: 0.5,
+      spreadCents: 2,
+      categoryGroup: "sports",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "execution-ready",
+      modelabilityScore: 80,
+      tradabilityScore: 85,
+      catalystScore: 85,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 84,
+      tradeOpportunityScore: 92,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: independentForecastRawJson(0.5)
+    }]);
+
+    const first = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 5,
+        maxEventExposureUsdc: 5,
+        stopLossUsdc: 9,
+        maxDailyLossUsdc: 1
+      }
+    });
+
+    const later = new Date(now.getTime() + 60 * 60 * 1000);
+    const runId2 = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: later.toISOString(),
+      completedAt: later.toISOString()
+    });
+    store.recordUniverseMarkets(runId2, [{
+      runId: runId2,
+      marketKey: "condition:daily-loss",
+      conditionId: "daily-loss",
+      slug: "daily-loss",
+      eventSlug: "daily-loss-event",
+      eventTitle: "Daily loss event",
+      title: "Daily loss market",
+      category: "sports",
+      tags: ["sports"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.2, 0.8],
+      clobTokenIds: ["daily-loss-yes", "daily-loss-no"],
+      yesTokenId: "daily-loss-yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(later, 11),
+      liquidityUsd: 50_000,
+      volume24hUsd: 20_000,
+      impliedProb: 0.2,
+      bestBid: 0.2,
+      bestAsk: 0.22,
+      midpoint: 0.2,
+      spreadCents: 2,
+      categoryGroup: "sports",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "execution-ready",
+      modelabilityScore: 80,
+      tradabilityScore: 85,
+      catalystScore: 85,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 84,
+      tradeOpportunityScore: 92,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: independentForecastRawJson(0.2)
+    }]);
+
+    const second = runAutoTradingIteration(store, {
+      sessionId: first.session.sessionId,
+      now: later,
+      limit: 4
+    });
+
+    assert.equal(second.summary.proposedOrders, 0);
+    assert.ok(second.summary.controlBlockers.includes("daily_loss_limit_reached"));
+    assert.equal(store.getAutoTradingSession(first.session.sessionId)?.status, "stopped");
+  });
+});
+
+test("auto-trader blocks paused sessions before discovery", async () => {
+  await withTempStore((store) => {
+    const session = store.createAutoTradingSession({
+      sessionId: "session-paused",
+      status: "paused",
+      mode: "paper",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      mandate: {
+        mode: "paper",
+        riskProfile: "aggressive",
+        budgetUsdc: 30,
+        timeframeHours: 24
+      }
+    });
+
+    const result = runAutoTradingIteration(store, {
+      sessionId: session.sessionId,
+      now: new Date("2026-04-24T12:00:00.000Z"),
+      limit: 4
+    });
+
+    assert.equal(result.summary.proposedOrders, 0);
+    assert.equal(result.candidates[0]?.action, "skip");
+    assert.ok(result.summary.controlBlockers.includes("session_paused"));
+    assert.equal(store.getAutoTradingSession(session.sessionId)?.status, "paused");
   });
 });
 
@@ -1694,6 +1870,69 @@ test("auto-trader allows autonomous gate only for live autonomous sessions", asy
     assert.equal(gate.canSubmitAutonomously, true);
     assert.equal(gate.previewRequest?.side, "SELL");
     assert.equal(gate.previewRequest?.size, 10);
+  });
+});
+
+test("auto-trader execution gate blocks paused and kill-switched live sessions", async () => {
+  await withTempStore((store) => {
+    const pausedSession = store.createAutoTradingSession({
+      sessionId: "session-live-paused",
+      status: "paused",
+      mode: "live_autonomous",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      mandate: {
+        mode: "live_autonomous",
+        riskProfile: "aggressive",
+        budgetUsdc: 30,
+        timeframeHours: 24
+      }
+    });
+    const killedSession = store.createAutoTradingSession({
+      sessionId: "session-live-killed",
+      status: "active",
+      mode: "live_autonomous",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      mandate: {
+        mode: "live_autonomous",
+        riskProfile: "aggressive",
+        budgetUsdc: 30,
+        timeframeHours: 24
+      },
+      metadata: {
+        killSwitch: {
+          enabled: true,
+          reason: "test"
+        }
+      }
+    });
+    const decision = store.recordAutoTradingDecision({
+      sessionId: pausedSession.sessionId,
+      iterationId: "iteration-1",
+      marketKey: "condition:paused",
+      title: "Paused market",
+      action: "live_buy_yes",
+      status: "proposed",
+      score: 100,
+      allocatedBudgetUsdc: 8,
+      targetPrice: 0.4,
+      payload: {
+        tokenId: "paused-yes",
+        shares: 20
+      }
+    });
+
+    const pausedGate = buildAutoTradingExecutionGate(pausedSession, decision);
+    const killedGate = buildAutoTradingExecutionGate(killedSession, decision);
+    assert.equal(pausedGate.canPreview, false);
+    assert.equal(pausedGate.canSubmitAutonomously, false);
+    assert.ok(pausedGate.blockers.includes("session_paused"));
+    assert.equal(killedGate.canPreview, false);
+    assert.equal(killedGate.canSubmitAutonomously, false);
+    assert.ok(killedGate.blockers.includes("session_kill_switch_enabled"));
   });
 });
 
