@@ -1,0 +1,17 @@
+# Optional explicit config for AutoCatalyst-heavy repositories.
+# Codex defaults already allow subagents, so this file is informational unless
+# you choose to merge it into .codex/config.toml yourself.
+#
+# This file is a good place for repo-wide Codex defaults such as:
+# - `model`
+# - `model_reasoning_effort`
+# - agent thread/depth limits
+#
+# For per-role AutoCatalyst model overrides, use `.codex/autocatalyst-models.toml`.
+
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+
+[agents]
+max_threads = 6
+max_depth = 3

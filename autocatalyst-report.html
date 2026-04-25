@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoCatalyst Report — Create a production-readiness step-by-step plan for autonomous Polymarket trading, validated with AutoCatalyst and actuarial forecasting logic</title>
+  <style>
+    :root {
+      --page: #f4efe6;
+      --paper: #fffdf8;
+      --ink: #181512;
+      --muted: #645b52;
+      --line: #d8cec0;
+      --line-strong: #a9957f;
+      --accent: #7d2f0f;
+      --accent-soft: #f6ebe4;
+      --accent-2: #1f4e5f;
+      --accent-2-soft: #e8f0f3;
+      --success-soft: #eef3ea;
+      --shadow: 0 1px 2px rgba(24, 21, 18, 0.06);
+      font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      line-height: 1.7;
+    }
+    a {
+      color: var(--accent-2);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+    .page {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 28px 20px 56px;
+    }
+    h1, h2, h3, h4 {
+      font-family: "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(2.4rem, 5vw, 4rem);
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 1.5rem;
+    }
+    h3 {
+      margin: 0 0 10px;
+      font-size: 1.08rem;
+    }
+    p, li, td, th, dd {
+      font-size: 1rem;
+    }
+    .report-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.9fr);
+      gap: 20px;
+      align-items: start;
+    }
+    .main-column,
+    .side-column {
+      display: grid;
+      gap: 18px;
+    }
+    .lead-sheet,
+    section,
+    aside {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .lead-sheet {
+      padding: 28px;
+    }
+    section,
+    aside {
+      padding: 22px;
+    }
+    .deck-label,
+    .verdict-label,
+    .eyebrow {
+      margin: 0 0 10px;
+      font: 600 0.82rem/1.2 "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .lead-sheet p {
+      max-width: 62ch;
+    }
+    .summary-line {
+      margin: 14px 0 0;
+      font-size: 1.12rem;
+    }
+    .lead-meta {
+      color: var(--muted);
+      margin-top: 14px;
+    }
+    .snapshot-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .snapshot-table th,
+    .snapshot-table td {
+      text-align: left;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .snapshot-table th {
+      width: 46%;
+      padding-right: 18px;
+      font-weight: 600;
+    }
+    .story-map {
+      margin-top: 18px;
+    }
+    .story-map figcaption,
+    .support-caption,
+    .source-note,
+    .evidence-note,
+    .lead-meta,
+    .scene-aside {
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+    .diagram {
+      margin-top: 10px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fcfaf4;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92rem;
+      white-space: pre-wrap;
+    }
+    .storyline {
+      position: relative;
+      padding-left: 32px;
+    }
+    .storyline::before {
+      content: "";
+      position: absolute;
+      left: 9px;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      background: var(--line-strong);
+    }
+    .scene {
+      position: relative;
+      padding: 0 0 20px 20px;
+    }
+    .scene:last-child {
+      padding-bottom: 0;
+    }
+    .scene-index {
+      position: absolute;
+      left: -32px;
+      top: 2px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font: 700 0.82rem/1 "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+    .scene-body {
+      padding-bottom: 2px;
+    }
+    .scene-body p {
+      margin: 0;
+    }
+    .scene-aside {
+      margin-top: 8px;
+    }
+    .contenders {
+      display: grid;
+      gap: 12px;
+    }
+    .contender {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      background: #fbf8f2;
+    }
+    .contender-winner {
+      background: var(--success-soft);
+      border-color: #b8c3b2;
+    }
+    .contender-kicker {
+      margin: 0 0 6px;
+      color: var(--accent);
+      font: 600 0.82rem/1.2 "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .verdict {
+      background: var(--accent-soft);
+      border: 1px solid #dcc0b2;
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .verdict h2 {
+      margin: 0;
+      font-size: 2rem;
+    }
+    .verdict-reason {
+      margin: 12px 0 0;
+      font-size: 1.05rem;
+    }
+    .verdict-meta {
+      margin: 18px 0 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px 16px;
+    }
+    .verdict-meta div {
+      padding-top: 10px;
+      border-top: 1px solid rgba(125, 47, 15, 0.15);
+    }
+    .verdict-meta dt {
+      font: 600 0.9rem/1.2 "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+      color: var(--muted);
+    }
+    .verdict-meta dd {
+      margin: 4px 0 0;
+    }
+    .plain-list,
+    .unknown-list {
+      margin: 0;
+      padding-left: 20px;
+    }
+    .plain-list li + li,
+    .unknown-list li + li {
+      margin-top: 8px;
+    }
+    .evidence-drawer {
+      display: grid;
+      gap: 18px;
+    }
+    .drawer-block {
+      padding-top: 4px;
+      border-top: 1px solid var(--line);
+    }
+    .drawer-block:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .empty-state {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #faf6ef;
+      color: var(--muted);
+    }
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: #fcfaf4;
+      font: 500 0.9rem/1.2 "Avenir Next", "Segoe UI", Helvetica, Arial, sans-serif;
+      color: var(--muted);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    @media (max-width: 720px) {
+      .page {
+        padding: 16px 14px 36px;
+      }
+      .report-shell {
+        grid-template-columns: 1fr;
+      }
+      .lead-sheet,
+      section,
+      aside {
+        padding: 18px;
+      }
+      .verdict-meta {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="report-shell">
+      <div class="main-column">
+        <header class="lead-sheet">
+          <p class="deck-label">Session Replay</p>
+          <h1>The user wanted a proper step-by-step markdown plan for making autonomous Polymarket trading production-ready, validated by AutoCatalyst and grounded in actuarial forecasting logic.</h1>
+          <p class="summary-line">Round 1 created and validated a canonical production-readiness plan for the Polymarket auto-trader. The promoted plan treats the current repo as a controlled paper prototype with guarded preview capability, not a production autonomous trader.</p>
+          <p class="lead-meta">Generated 2026-04-25 18:01:47 Romance Summer Time from <code>autocatalyst.md</code>, <code>autocatalyst.jsonl</code>, and linked artifacts.</p>
+          <div class="pill-list">
+            <span class="pill">Audience: repository maintainers, operator-users of the Polymarket plugin, and future agents that will run paper/live guarded autonomous trading sessions.</span><span class="pill">Constraints: 5 logged</span><span class="pill">Off limits: 4 logged</span>
+          </div>
+        </header>
+
+        <section>
+          <p class="eyebrow">Story map</p>
+          <h2>The Shape Of This Session</h2>
+          <p>This diagram follows the actual path the session took: request, problem, contenders, tribunal, and outcome.</p>
+          <figure class="story-map">
+            <figcaption>The diagram is session-specific. It mirrors the logged round story instead of the generic AutoCatalyst workflow.</figcaption>
+            <div class="diagram mermaid">flowchart TD
+    ASK[&quot;User request: The user wanted a proper step-by-step markdown plan for making autonomo…&quot;]
+    START[&quot;Starting point: Promoted incumbent after Round 1: &#x27;docs/autonomous-trading-production-r…&quot;]
+    ASK --&gt; START
+    START --&gt; R1C[&quot;Round 1: The incumbent was challenged.&quot;]
+    R1C --&gt; R1O[&quot;Contenders: A, B, AB&quot;]
+    R1O --&gt; R1V[&quot;Tribunal: AB won&quot;]
+    R1V --&gt; R1N[&quot;Winner AB: AB combined broad operational coverage with strict gate/evidence di…&quot;]
+    R1N --&gt; END[&quot;Outcome: AB was promoted as the new incumbent.&quot;]</div>
+          </figure>
+        </section>
+
+        <section>
+          <p class="eyebrow">Chronology</p>
+          <h2>What Happened</h2>
+          <div class="storyline">
+            <article class="scene"><div class="scene-index">1</div><div class="scene-body"><h3>The User Asked For A Real Session Replay</h3><p>The user wanted a proper step-by-step markdown plan for making autonomous Polymarket trading production-ready, validated by AutoCatalyst and grounded in actuarial forecasting logic.</p><p class="scene-aside">This is the human-written session story artifact that the report now prefers over raw log reconstruction.</p><p class="source-note">Source: round-1-casefile.md</p></div></article><article class="scene"><div class="scene-index">2</div><div class="scene-body"><h3>The Starting Point Was The Wrong Kind Of Report</h3><p>The repo already supported paper autonomous sessions, discovery/classification, state persistence, scheduling, guarded live previews, and executor gates. It was not production-ready for live autonomy because independent fair-value forecasting, calibration, execution-realistic paper fills, kill switches, pause/resume/reconciliation, and full loss enforcement were incomplete or missing.</p><p class="scene-aside">The current repo has a meaningful control plane but is not a production trader: it can discover, filter, schedule, paper-fill, mark positions, preview gated live orders, and enforce some paper risk controls.</p><p class="source-note">Source: round-1-casefile.md</p></div></article><article class="scene"><div class="scene-index">3</div><div class="scene-body"><h3>Session Replay Step 1</h3><p>Candidate A established broad production phases but remained too outline-like.</p><p class="source-note">Source: round-1-casefile.md</p></div></article><article class="scene"><div class="scene-index">4</div><div class="scene-body"><h3>Session Replay Step 2</h3><p>The critic identified the highest-risk ambiguity: live execution gates and forecast-before-price discipline needed to be hard invariants.</p><p class="source-note">Source: round-1-casefile.md</p></div></article><article class="scene"><div class="scene-index">5</div><div class="scene-body"><h3>Session Replay Step 3</h3><p>Candidate B tightened the gate model, acceptance artifacts, test strategy, and readiness scoring.</p><p class="source-note">Source: round-1-casefile.md</p></div></article><article class="scene"><div class="scene-index">6</div><div class="scene-body"><h3>Session Replay Step 4</h3><p>Candidate AB merged A&#x27;s operational breadth with B&#x27;s stricter evidence-gated structure.</p><p class="source-note">Source: round-1-casefile.md</p></div></article><article class="scene"><div class="scene-index">7</div><div class="scene-body"><h3>Session Replay Step 5</h3><p>Three real AutoCatalyst judges independently ranked AB first.</p><p class="source-note">Source: round-1-casefile.md</p></div></article>
+          </div>
+        </section>
+
+        <section>
+          <p class="eyebrow">Contenders</p>
+          <h2>The Competing Directions</h2>
+          <p>The contenders are shown as editorial positions, not as raw candidate labels.</p>
+          <div class="contenders">
+            <article class="contender contender-winner"><h3>Casefile comparison</h3><p>Candidate A gave broad phase coverage but was too outline-like and not strict enough on live execution semantics. Candidate B tightened the safety invariants, gate model, acceptance artifacts, tests, and readiness scoring. Candidate AB merged A&#x27;s broad operational roadmap with B&#x27;s stricter evidence-gated structure.</p></article>
+          </div>
+        </section>
+
+        <section>
+          <p class="eyebrow">Decision</p>
+          <h2>Why The Winner Won</h2>
+          
+        <div class="verdict">
+          <p class="verdict-label">Winning direction</p>
+          <h2>AB</h2>
+          <p class="verdict-reason">Three real AutoCatalyst judges independently ranked Candidate AB first, Candidate B second, and Candidate A third. The panel chose AB because it keeps the full roadmap while making live submission, independent forecasts, gates, acceptance artifacts, testing, and readiness assessment explicit.</p>
+          <dl class="verdict-meta">
+            <div><dt>Ranking</dt><dd>AB won</dd></div>
+            <div><dt>Status</dt><dd>promote</dd></div>
+            <div><dt>Hard checks</dt><dd>pass</dd></div>
+            <div><dt>Convergence</dt><dd>continue (0/2)</dd></div>
+            <div><dt>Blind judges</dt><dd>3 verdicts logged</dd></div><div><dt>Aggregation</dt><dd>unanimous ranked-choice result</dd></div>
+          </dl>
+        </div>
+        
+          <p class="empty-state">No promoted criteria were logged for the latest round.</p>
+        </section>
+
+        <section>
+          <p class="eyebrow">Outcome</p>
+          <h2>What Changed</h2>
+          <ul class="plain-list">
+  <li>`docs/autonomous-trading-production-readiness-plan.md` is now the promoted canonical plan. The next safe milestone is production-grade `paper_trading` plus `live_preview`, with zero autonomous live submission.</li>
+  <li>The winning direction now points at docs/autonomous-trading-production-readiness-plan.md.</li>
+  <li>incumbent survival streak is below the target (0/2).</li>
+</ul>
+          <p class="support-caption">This closes the main story. Supporting evidence stays below so the first read remains focused on the session itself.</p>
+        </section>
+      </div>
+
+      <div class="side-column">
+        <aside>
+          <p class="eyebrow">Snapshot</p>
+          <h2>At A Glance</h2>
+          <table class="snapshot-table">
+            <tbody>
+              <tr><th scope="row">Task class</th><td>planning</td></tr><tr><th scope="row">Evidence mode</th><td>hybrid</td></tr><tr><th scope="row">Rounds logged</th><td>1</td></tr><tr><th scope="row">Convergence</th><td>continue (0/2)</td></tr><tr><th scope="row">Latest winner</th><td>AB</td></tr><tr><th scope="row">Judge ranking</th><td>AB won</td></tr>
+            </tbody>
+          </table>
+        </aside>
+
+        <aside>
+          <p class="eyebrow">Rubric</p>
+          <h2>What This Round Optimized For</h2>
+          <ul class="plain-list">
+  <li>Gives a step-by-step path from current paper prototype to production-ready autonomous trading.</li>
+  <li>Separates paper, live guarded, and live autonomous gates.</li>
+  <li>Embeds actuarial fair-value logic without market-price contamination.</li>
+  <li>Specifies safety, risk, automation, observability, backtesting, and audit controls.</li>
+  <li>Defines acceptance criteria that can become tests, scripts, checks, or operational runbooks.</li>
+</ul>
+        </aside>
+
+        <aside>
+          <p class="eyebrow">Evidence drawer</p>
+          <h2>Supporting Material</h2>
+          <div class="evidence-drawer">
+            <div class="drawer-block">
+              <h3>Core files</h3>
+              <ul class="plain-list">
+  <li><a href="autocatalyst.jsonl">autocatalyst.jsonl</a></li>
+  <li><a href="autocatalyst.md">autocatalyst.md</a></li>
+  <li><a href="autocatalyst-rubric.md">autocatalyst-rubric.md</a></li>
+  <li><a href="autocatalyst-dashboard.md">autocatalyst-dashboard.md</a></li>
+  <li><a href="autocatalyst-artifacts/process-overview.md">autocatalyst-artifacts/process-overview.md</a></li>
+  <li><a href="autocatalyst-artifacts/session-history.md">autocatalyst-artifacts/session-history.md</a></li>
+  <li><a href="autocatalyst-report.html">autocatalyst-report.html</a></li>
+</ul>
+            </div>
+            <div class="drawer-block">
+              <h3>Latest tribunal</h3>
+              <ul class="plain-list">
+  <li><strong>Candidate map.</strong> <a href="autocatalyst-artifacts/rounds/round-1-tribunal-summary.md">autocatalyst-artifacts/rounds/round-1-tribunal-summary.md</a> keeps the unblinding information on the parent side only.</li>
+  <li><strong>Tribunal summary.</strong> <a href="autocatalyst-artifacts/rounds/round-1-tribunal-summary.md">autocatalyst-artifacts/rounds/round-1-tribunal-summary.md</a> Create a production-readiness step-by-step plan for autonomous Polymarket trading, validated by real AutoCatalyst subagents and embedding actuarial forecasting logic.</li>
+  <li><strong>Structured summary.</strong> <a href="autocatalyst-artifacts/rounds/round-1-tribunal-summary.json">autocatalyst-artifacts\rounds\round-1-tribunal-summary.json</a></li>
+  <li><strong>Judge 1.</strong> verdict path not logged. Ranking: Candidate 3 &gt; Candidate 2 &gt; Candidate 1.</li>
+  <li><strong>Judge 2.</strong> verdict path not logged. Ranking: Candidate 3 &gt; Candidate 2 &gt; Candidate 1.</li>
+  <li><strong>Judge 3.</strong> verdict path not logged. Ranking: Candidate 3 &gt; Candidate 2 &gt; Candidate 1.</li>
+  <li><strong>Aggregation method.</strong> unanimous ranked-choice result</li>
+  <li><strong>Panel result.</strong> AB</li>
+  <li><strong>Panel note.</strong> AB combined broad operational coverage with strict gate/evidence discipline; all three judges ranked it first.</li>
+</ul>
+            </div>
+            <div class="drawer-block">
+              <h3>Latest critic</h3>
+              <p class="empty-state">No structured critic output was logged for the latest round.</p>
+            </div>
+            <div class="drawer-block">
+              <h3>Latest research</h3>
+              <p class="empty-state">No structured researcher output was logged for the latest round.</p>
+            </div>
+            <div class="drawer-block">
+              <h3>Round artifacts</h3>
+              <ul class="plain-list">
+  <li><a href="autocatalyst-artifacts/rounds/round-1-casefile.md">autocatalyst-artifacts/rounds/round-1-casefile.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-planner-output.md">autocatalyst-artifacts/rounds/round-1-planner-output.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-researcher-output.md">autocatalyst-artifacts/rounds/round-1-researcher-output.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-critic-output.md">autocatalyst-artifacts/rounds/round-1-critic-output.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-judge-1.md">autocatalyst-artifacts/rounds/round-1-judge-1.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-judge-2.md">autocatalyst-artifacts/rounds/round-1-judge-2.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-judge-3.md">autocatalyst-artifacts/rounds/round-1-judge-3.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-candidate-A.md">autocatalyst-artifacts/rounds/round-1-candidate-A.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-candidate-B.md">autocatalyst-artifacts/rounds/round-1-candidate-B.md</a></li>
+  <li><a href="autocatalyst-artifacts/rounds/round-1-candidate-AB.md">autocatalyst-artifacts/rounds/round-1-candidate-AB.md</a></li>
+  <li><a href="docs/autonomous-trading-production-readiness-plan.md">docs/autonomous-trading-production-readiness-plan.md</a></li>
+</ul>
+            </div>
+            <div class="drawer-block">
+              <h3>Logged agents</h3>
+              <p class="empty-state">No agent names were logged across rounds.</p>
+            </div>
+            <div class="drawer-block">
+              <h3>Still unknown</h3>
+              <ul class="unknown-list">
+<li><strong>Deliverables.</strong> The report looks for a bullet starting with &#x27;Deliverables:&#x27; inside &#x27;## Audience and Deliverables&#x27;.</li>
+<li><strong>Exact change diff for the winning candidate.</strong> This report links artifacts, but it does not open or summarize file diffs on its own.</li>
+<li><strong>Full critique text and full tribunal deliberation.</strong> The report includes the logged outcome summary, not the complete subagent conversations.</li>
+<li><strong>Blind-judging method details.</strong> The current report inputs do not include a separate field describing the judging protocol used in a round.</li>
+<li><strong>Rounds missing a winner reason.</strong> None</li>
+<li><strong>Rounds missing a judge ranking.</strong> None</li>
+<li><strong>Rounds missing a benchmark summary.</strong> None</li>
+<li><strong>Rounds missing operator notes.</strong> None</li>
+</ul>
+            </div>
+          </div>
+          <p class="evidence-note">Evidence stays here on purpose. It is available for inspection, but it no longer drives the first read.</p>
+        </aside>
+      </div>
+    </div>
+  </div>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, securityLevel: "loose", theme: "neutral" });
+  </script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+{
+  "schema": "autocatalyst.tribunal.v1",
+  "round": 1,
+  "candidateMapArtifact": "autocatalyst-artifacts/rounds/round-1-tribunal-summary.md",
+  "judgePackets": [],
+  "judgeVerdicts": [
+    {
+      "judge": "judge1",
+      "artifact": "",
+      "ranking": [
+        "Candidate 3",
+        "Candidate 2",
+        "Candidate 1"
+      ],
+      "winner": "",
+      "rationale": "",
+      "blockers": []
+    },
+    {
+      "judge": "judge2",
+      "artifact": "",
+      "ranking": [
+        "Candidate 3",
+        "Candidate 2",
+        "Candidate 1"
+      ],
+      "winner": "",
+      "rationale": "",
+      "blockers": []
+    },
+    {
+      "judge": "judge3",
+      "artifact": "",
+      "ranking": [
+        "Candidate 3",
+        "Candidate 2",
+        "Candidate 1"
+      ],
+      "winner": "",
+      "rationale": "",
+      "blockers": []
+    }
+  ],
+  "aggregationMethod": "unanimous ranked-choice result",
+  "result": "AB",
+  "note": "AB combined broad operational coverage with strict gate/evidence discipline; all three judges ranked it first."
+}

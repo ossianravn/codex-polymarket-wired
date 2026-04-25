@@ -1,0 +1,38 @@
+# Optional per-role model profile for AutoCatalyst subagents.
+#
+# Copy this file to `.codex/autocatalyst-models.toml` in the target repository
+# and adjust the values you want to override.
+#
+# Important:
+# - The files in `.codex/agents/*.toml` define role behavior. They do not pin
+#   the model by themselves.
+# - Model choice happens when the parent agent spawns each subagent.
+# - If this file is absent, child agents inherit the parent/default model.
+
+[defaults]
+model = "gpt-5.4"
+reasoning_effort = "high"
+
+[roles.planner]
+model = "gpt-5.4"
+reasoning_effort = "high"
+
+[roles.researcher]
+model = "gpt-5.4"
+reasoning_effort = "high"
+
+[roles.critic]
+model = "gpt-5.4"
+reasoning_effort = "medium"
+
+[roles.rewriter]
+model = "gpt-5.4-mini"
+reasoning_effort = "high"
+
+[roles.synthesizer]
+model = "gpt-5.4-mini"
+reasoning_effort = "high"
+
+[roles.judge]
+model = "gpt-5.4-mini"
+reasoning_effort = "high"

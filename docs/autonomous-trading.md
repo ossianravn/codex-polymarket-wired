@@ -4,6 +4,8 @@ The autonomous trading implementation is a mode-aware control plane. It turns a 
 
 It does not submit live orders. Live execution remains gated behind `preview_limit_order`, `preview_marketable_order`, and `submit_previewed_order`.
 
+For the staged path from this paper/preview control plane to production-grade autonomous trading, see `docs/autonomous-trading-production-readiness-plan.md`.
+
 ## mandate
 
 An autonomous trading mandate contains:
