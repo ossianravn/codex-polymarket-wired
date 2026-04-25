@@ -14,6 +14,13 @@ export {
   type ForecastWriterResult,
   type IndependentForecastArtifact
 } from "./forecast-writer.js";
+export {
+  runResearchRequestWorker,
+  type ResearchEvidenceBundle,
+  type ResearchEvidenceItem,
+  type ResearchRequestWorkerInput,
+  type ResearchRequestWorkerResult
+} from "./research-request-worker.js";
 
 export type AutoTradingRiskProfile = "conservative" | "balanced" | "aggressive";
 export type AutoTradingMode = "paper" | "live_guarded" | "live_autonomous";

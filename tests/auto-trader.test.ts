@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   buildAutoTradingExecutionGate,
   compactAutoTradingIterationResult,
+  runIndependentForecastWriter,
+  runResearchRequestWorker,
   runAutoTradingIteration
 } from "../packages/auto-trader/src/index.js";
 import { openStateStore } from "../packages/state-store/src/index.js";
@@ -253,6 +255,91 @@ test("auto-trader blocks heuristic-only entries until independent fair value exi
     const storedResearchRequest = storedDecision?.payload.researchRequest as Record<string, unknown> | undefined;
     assert.equal(storedResearchRequest?.marketKey, "condition:heuristic-only");
     assert.equal(storedResearchRequest?.requiredArtifact && typeof storedResearchRequest.requiredArtifact === "object", true);
+
+    const pendingWorkerResult = runResearchRequestWorker(store, {
+      sessionId: result.session.sessionId,
+      now,
+      limit: 10
+    });
+    assert.equal(pendingWorkerResult.recordedResearchRuns, 0);
+    assert.equal(pendingWorkerResult.skippedWithoutEvidence, 1);
+
+    const contaminatedWorkerResult = runResearchRequestWorker(store, {
+      sessionId: result.session.sessionId,
+      now,
+      limit: 10,
+      evidenceBundles: [{
+        marketKey: "condition:heuristic-only",
+        title: "High-scoring market without independent forecast",
+        question: "Will high-scoring market resolve yes?",
+        thesis: "This copies Polymarket odds and must be rejected.",
+        fairValueLow: 0.52,
+        fairValueBase: 0.6,
+        fairValueHigh: 0.68,
+        supportsYes: [{
+          source: "venue-note",
+          title: "Polymarket odds moved",
+          summary: "This evidence uses venue price as the fair value.",
+          stance: "supports_yes",
+          confidence: "0.7"
+        }],
+        supportsNo: [{
+          source: "counter-source",
+          title: "Counter evidence remains",
+          summary: "A remaining dependency could prevent the condition from resolving yes.",
+          stance: "supports_no",
+          confidence: "0.55"
+        }],
+        providers: ["venue-note"],
+        completedAt: now.toISOString()
+      }]
+    });
+    assert.equal(contaminatedWorkerResult.recordedResearchRuns, 0);
+    assert.equal(contaminatedWorkerResult.skippedInvalidEvidence, 1);
+    assert.equal(contaminatedWorkerResult.requests[0]?.reasonCodes.includes("venue_price_contaminated_evidence"), true);
+
+    const recordedWorkerResult = runResearchRequestWorker(store, {
+      sessionId: result.session.sessionId,
+      now,
+      limit: 10,
+      evidenceBundles: [{
+        marketKey: "condition:heuristic-only",
+        title: "High-scoring market without independent forecast",
+        question: "Will high-scoring market resolve yes?",
+        thesis: "Independent non-venue evidence supports a fair probability above the execution threshold.",
+        fairValueLow: 0.52,
+        fairValueBase: 0.6,
+        fairValueHigh: 0.68,
+        supportsYes: [{
+          source: "official-source",
+          title: "Official evidence supports yes",
+          summary: "The official source confirms conditions that materially support the yes case.",
+          stance: "supports_yes",
+          confidence: "0.7"
+        }],
+        supportsNo: [{
+          source: "counter-source",
+          title: "Counter evidence remains",
+          summary: "A remaining dependency could prevent the condition from resolving yes.",
+          stance: "supports_no",
+          confidence: "0.55"
+        }],
+        openQuestions: ["Whether the dependency is completed before resolution."],
+        providers: ["official-source", "counter-source"],
+        completedAt: now.toISOString()
+      }]
+    });
+    assert.equal(recordedWorkerResult.recordedResearchRuns, 1);
+    assert.equal(recordedWorkerResult.requests[0]?.status, "recorded");
+
+    const forecastWriterResult = runIndependentForecastWriter(store, { runId, now, limit: 10 });
+    assert.equal(forecastWriterResult.written, 1);
+    assert.equal(forecastWriterResult.forecasts[0]?.method, "deep_research_forecast_v1");
+
+    const researchedMarket = store.getUniverseMarket(runId, "condition:heuristic-only");
+    const forecast = (researchedMarket?.rawJson as Record<string, unknown>).independentForecast as Record<string, unknown>;
+    assert.equal(forecast.method, "deep_research_forecast_v1");
+    assert.equal(forecast.probability, 0.6);
   });
 });
 
