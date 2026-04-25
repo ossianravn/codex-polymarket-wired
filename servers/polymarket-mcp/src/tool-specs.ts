@@ -355,6 +355,26 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "execute_auto_trading_decision",
+    access: "write",
+    description:
+      "Execute a persisted autonomous trading decision according to its session mode. Paper is blocked, live_guarded creates a guarded preview and waits for approval, and live_autonomous submits only after preview policy passes and trading config permits it.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        session_id: { type: "string", minLength: 1 },
+        decision_id: { type: "string", minLength: 1 },
+        auto_submit: {
+          type: "boolean",
+          default: true,
+          description: "For live_autonomous only. When false, create and persist the preview but do not submit it."
+        }
+      },
+      required: ["session_id", "decision_id"]
+    }
+  },
+  {
     name: "ingest_market_universe",
     access: "read",
     description:

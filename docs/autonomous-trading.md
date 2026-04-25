@@ -108,12 +108,21 @@ The session mode controls execution:
 
 Use `get_auto_trading_execution_gate` with a session id and decision id to inspect the bridge from a persisted decision into `preview_limit_order` input. The gate returns blockers, whether approval is required, and whether autonomous submission is eligible after preview policy passes.
 
+Use `execute_auto_trading_decision` to apply the gate:
+
+- `paper` records `blocked` execution state and does not create a live preview.
+- `live_guarded` creates the guarded preview and records `awaiting_approval`.
+- `live_autonomous` creates the guarded preview and submits only when the preview is submit-safe, trading is enabled in both environment and risk config, credentials exist, and the policy hash has not changed.
+
+Each execution attempt updates the decision payload with `execution` and `executionHistory` audit fields.
+
 ## MCP tools
 
 - `start_auto_trading_session`
 - `run_auto_trading_iteration`
 - `get_auto_trading_session`
 - `get_auto_trading_execution_gate`
+- `execute_auto_trading_decision`
 
 These tools persist session, decision, paper-fill, and paper-position records. They return compact decision payloads by default so autonomous agents do not ingest raw market snapshots unless explicitly requested with `compact: false`. Paper experimentation remains safe because paper mode does not call live order submission.
 

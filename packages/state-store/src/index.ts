@@ -3011,6 +3011,34 @@ export class StateStore {
     return autoTradingDecisionRowToRecord(row);
   }
 
+  updateAutoTradingDecisionPayload(decisionId: string, payloadPatch: Record<string, unknown>): StoredAutoTradingDecisionRecord {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM auto_trading_decisions
+      WHERE decision_id = ?
+      LIMIT 1
+    `).get(decisionId);
+    if (!row) {
+      throw new Error(`Unknown auto-trading decision ${decisionId}.`);
+    }
+    const existing = autoTradingDecisionRowToRecord(row);
+    this.db.prepare(`
+      UPDATE auto_trading_decisions
+      SET payload_json = ?
+      WHERE decision_id = ?
+    `).run(
+      jsonString({ ...existing.payload, ...payloadPatch }, {}),
+      decisionId
+    );
+    const updated = this.db.prepare(`
+      SELECT *
+      FROM auto_trading_decisions
+      WHERE decision_id = ?
+      LIMIT 1
+    `).get(decisionId);
+    return autoTradingDecisionRowToRecord(updated);
+  }
+
   listAutoTradingDecisions(args: {
     sessionId: string;
     iterationId?: string;

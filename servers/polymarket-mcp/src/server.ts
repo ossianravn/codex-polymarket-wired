@@ -34,6 +34,7 @@ import {
   summarizeWarnings,
   type MarketSnapshot,
   type PolicyWarning,
+  type PreviewRecord,
   type Side
 } from "../../../packages/polymarket-core/src/index.js";
 import {
@@ -534,6 +535,143 @@ function previewSummaryText(previewId: string, warnings: PolicyWarning[], canSub
   const status = canSubmit ? "Preview passed all blocking checks." : "Preview contains blocking issues.";
   const warningText = warnings.length > 0 ? summarizeWarnings(warnings) : "No warnings.";
   return [`Preview ID: ${previewId}`, status, warningText].join("\n");
+}
+
+interface LimitOrderPreviewInput {
+  token_id: string;
+  side: Side;
+  price: number;
+  size: number;
+  order_type: "GTC" | "GTD";
+  expiration?: string;
+  post_only: boolean;
+  client_order_id?: string;
+}
+
+interface GuardedLimitOrderPreviewResult {
+  preview: PreviewRecord;
+  marketSnapshot: MarketSnapshot;
+  geoblock?: Record<string, unknown>;
+  balances: Record<string, unknown>;
+  ownerAddress?: string;
+  openOrderCount: number;
+  policySummary: string;
+}
+
+async function createGuardedLimitOrderPreview(input: LimitOrderPreviewInput): Promise<GuardedLimitOrderPreviewResult> {
+  const { config, limits, policyHash } = await currentLimits();
+  const warnings: PolicyWarning[] = [];
+
+  const marketSnapshot = await resolveMarketByIdentifier(config, "token_id", input.token_id, {
+    includeComments: false,
+    includeOrderbookSummary: false,
+    includeRelatedMarkets: false
+  });
+  const orderbook = await getOrderbook(config, input.token_id, 50);
+  const liveMarketSnapshot = applyOrderbookSummary(marketSnapshot, orderbook);
+
+  const tickSize = orderbook.tickSize ?? liveMarketSnapshot.minimumTickSize ?? 0.01;
+  const normalizedPrice = normalizeLimitPrice(input.side, input.price, tickSize);
+  if (normalizedPrice !== input.price) {
+    warnings.push(info("PRICE_ADJUSTED", `Price ${input.price} was normalized to ${normalizedPrice} to respect tick size ${tickSize}.`));
+  }
+
+  if (input.order_type === "GTD" && !input.expiration) {
+    warnings.push(block("MISSING_EXPIRATION", "GTD orders require an expiration timestamp."));
+  }
+  if (input.expiration && isPast(input.expiration)) {
+    warnings.push(block("EXPIRATION_IN_PAST", "Expiration must be in the future."));
+  }
+
+  if (input.post_only && input.side === "BUY" && orderbook.bestAsk !== undefined && normalizedPrice >= orderbook.bestAsk) {
+    warnings.push(block("POST_ONLY_CROSSES_BOOK", `BUY post-only price ${normalizedPrice} crosses the best ask ${orderbook.bestAsk}.`));
+  }
+  if (input.post_only && input.side === "SELL" && orderbook.bestBid !== undefined && normalizedPrice <= orderbook.bestBid) {
+    warnings.push(block("POST_ONLY_CROSSES_BOOK", `SELL post-only price ${normalizedPrice} crosses the best bid ${orderbook.bestBid}.`));
+  }
+  if (!input.post_only && input.side === "BUY" && orderbook.bestAsk !== undefined && normalizedPrice >= orderbook.bestAsk) {
+    warnings.push(warn("IMMEDIATE_EXECUTION", "This limit buy is marketable and may execute immediately against the ask."));
+  }
+  if (!input.post_only && input.side === "SELL" && orderbook.bestBid !== undefined && normalizedPrice <= orderbook.bestBid) {
+    warnings.push(warn("IMMEDIATE_EXECUTION", "This limit sell is marketable and may execute immediately against the bid."));
+  }
+
+  const orderNotionalUsd = Number((normalizedPrice * input.size).toFixed(6));
+  const geoblockContext = await geoblockIfNeeded(config, limits);
+  warnings.push(...geoblockContext.warnings);
+
+  const exposure = await exposureContext(config, liveMarketSnapshot, orderNotionalUsd);
+  warnings.push(...exposure.warnings);
+  const thesisExposure = thesisExposureContext(config, liveMarketSnapshot, orderNotionalUsd);
+  warnings.push(...thesisExposure.warnings);
+
+  const openOrders = await openOrdersContext(config, undefined, liveMarketSnapshot.conditionId);
+  warnings.push(...openOrders.warnings);
+
+  const balance = await balanceContext(config, input.side, input.token_id, orderNotionalUsd, input.size);
+  warnings.push(...balance.warnings);
+
+  const policy = evaluatePolicy(limits, {
+    marketId: liveMarketSnapshot.conditionId,
+    tokenId: input.token_id,
+    tags: liveMarketSnapshot.tags,
+    orderNotionalUsd,
+    marketExposureUsd: exposure.marketExposureUsd,
+    thesisExposureUsd: thesisExposure.thesisExposureUsd,
+    thesisMarketCount: thesisExposure.thesisMarketCount,
+    grossExposureUsd: exposure.grossExposureUsd,
+    openOrderCount: openOrders.allOpenOrders.length,
+    resolvesWithinHours: hoursUntil(liveMarketSnapshot.endDate),
+    geoblockPassed: geoblockContext.geoblockPassed
+  });
+  warnings.push(...policy.warnings);
+
+  const submissionPayload = {
+    kind: "limit",
+    token_id: input.token_id,
+    side: input.side,
+    price: normalizedPrice,
+    size: input.size,
+    order_type: input.order_type,
+    expiration: input.expiration ? Math.floor(Date.parse(input.expiration) / 1000) : undefined,
+    post_only: input.post_only,
+    client_order_id: input.client_order_id,
+    tick_size: String(tickSize),
+    neg_risk: marketSnapshot.negRisk ?? false
+  };
+
+  const preview = storePreview({
+    orderKind: "limit",
+    normalizedParams: {
+      token_id: input.token_id,
+      side: input.side,
+      normalized_price: normalizedPrice,
+      requested_price: input.price,
+      size: input.size,
+      order_type: input.order_type,
+      expiration: input.expiration,
+      post_only: input.post_only,
+      order_notional_usd: orderNotionalUsd,
+      tick_size: tickSize,
+      best_bid: orderbook.bestBid,
+      best_ask: orderbook.bestAsk
+    },
+    warnings: dedupeWarnings(warnings),
+    canSubmit: policy.allow && !warnings.some((warning) => warning.severity === "block"),
+    policyHash,
+    submissionPayload,
+    marketSnapshot: liveMarketSnapshot
+  });
+
+  return {
+    preview,
+    marketSnapshot: liveMarketSnapshot,
+    geoblock: geoblockContext.geoblock,
+    balances: balance.checks,
+    ownerAddress: exposure.ownerAddress,
+    openOrderCount: openOrders.allOpenOrders.length,
+    policySummary: summarizeWarnings(dedupeWarnings(warnings))
+  };
 }
 
 export interface BookmarkedMarketSummary {
@@ -1916,6 +2054,234 @@ server.registerTool(
         : gate.requiresApproval
           ? "live_guarded_requires_explicit_approval_after_preview"
           : "not_submittable"
+    });
+  }
+);
+
+server.registerTool(
+  "execute_auto_trading_decision",
+  {
+    description: toolDescription("execute_auto_trading_decision"),
+    inputSchema: {
+      session_id: z.string().min(1),
+      decision_id: z.string().min(1),
+      auto_submit: z.boolean().default(true)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const session = store.getAutoTradingSession(input.session_id);
+    if (!session) {
+      throw new Error(`Unknown auto-trading session ${input.session_id}.`);
+    }
+    let decision = store
+      .listAutoTradingDecisions({ sessionId: input.session_id, limit: 500 })
+      .find((candidate) => candidate.decisionId === input.decision_id);
+    if (!decision) {
+      throw new Error(`Unknown auto-trading decision ${input.decision_id} for session ${input.session_id}.`);
+    }
+
+    const now = new Date().toISOString();
+    const gate = buildAutoTradingExecutionGate(session, decision);
+    const existingHistory = Array.isArray(decision.payload.executionHistory)
+      ? decision.payload.executionHistory
+      : [];
+    const writeExecution = (execution: Record<string, unknown>) => {
+      const entry = { ...execution, updatedAt: new Date().toISOString() };
+      decision = store.updateAutoTradingDecisionPayload(decision?.decisionId ?? input.decision_id, {
+        execution: entry,
+        executionHistory: [...existingHistory, entry].slice(-50)
+      });
+      return decision;
+    };
+
+    if (!gate.canPreview || !gate.previewRequest) {
+      const updatedDecision = writeExecution({
+        status: "blocked",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        blockers: gate.blockers,
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        execution: updatedDecision.payload.execution
+      });
+    }
+
+    const previewResult = await createGuardedLimitOrderPreview({
+      token_id: gate.previewRequest.tokenId,
+      side: gate.previewRequest.side,
+      price: gate.previewRequest.price,
+      size: gate.previewRequest.size,
+      order_type: gate.previewRequest.orderType,
+      post_only: gate.previewRequest.postOnly,
+      client_order_id: gate.previewRequest.clientOrderId
+    });
+    const preview = previewResult.preview;
+
+    if (!preview.canSubmit) {
+      const updatedDecision = writeExecution({
+        status: "blocked_preview",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        previewId: preview.previewId,
+        canSubmit: preview.canSubmit,
+        policyHash: preview.policyHash,
+        warnings: preview.warnings,
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        previewResult,
+        execution: updatedDecision.payload.execution
+      });
+    }
+
+    if (gate.requiresApproval) {
+      const updatedDecision = writeExecution({
+        status: "awaiting_approval",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        previewId: preview.previewId,
+        canSubmit: preview.canSubmit,
+        policyHash: preview.policyHash,
+        warnings: preview.warnings,
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        previewResult,
+        execution: updatedDecision.payload.execution
+      });
+    }
+
+    if (!gate.canSubmitAutonomously) {
+      const updatedDecision = writeExecution({
+        status: "blocked",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        previewId: preview.previewId,
+        blockers: ["mode_not_autonomous"],
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        previewResult,
+        execution: updatedDecision.payload.execution
+      });
+    }
+
+    if (!input.auto_submit) {
+      const updatedDecision = writeExecution({
+        status: "preview_created",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        previewId: preview.previewId,
+        canSubmit: preview.canSubmit,
+        policyHash: preview.policyHash,
+        autoSubmitDisabled: true,
+        warnings: preview.warnings,
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        previewResult,
+        execution: updatedDecision.payload.execution
+      });
+    }
+
+    const { limits, policyHash } = await currentLimits();
+    if (!config.enableTrading || !limits.tradingEnabled || !hasTradingCredentials(config)) {
+      const updatedDecision = writeExecution({
+        status: "blocked_submission_config",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        previewId: preview.previewId,
+        blockers: [
+          !config.enableTrading ? "env_trading_disabled" : undefined,
+          !limits.tradingEnabled ? "risk_config_trading_disabled" : undefined,
+          !hasTradingCredentials(config) ? "missing_trading_credentials" : undefined
+        ].filter(Boolean),
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        previewResult,
+        execution: updatedDecision.payload.execution
+      });
+    }
+    if (preview.policyHash !== policyHash) {
+      const updatedDecision = writeExecution({
+        status: "blocked_policy_changed",
+        mode: session.mode,
+        decisionId: input.decision_id,
+        previewId: preview.previewId,
+        previewPolicyHash: preview.policyHash,
+        currentPolicyHash: policyHash,
+        createdAt: now
+      });
+      return textResult({
+        session,
+        decision: compactStoredAutoTradingDecision(updatedDecision),
+        gate,
+        previewResult,
+        execution: updatedDecision.payload.execution
+      });
+    }
+
+    const submitResult = await invokePythonHelper<Record<string, unknown>>(config, "submit_preview", preview.submissionPayload);
+    const marketSnapshot = preview.marketSnapshot;
+    const marketKey = store.resolveMarketKey({
+      conditionId: marketSnapshot?.conditionId,
+      marketId: marketSnapshot?.marketId,
+      slug: marketSnapshot?.slug,
+      title: marketSnapshot?.title
+    });
+    store.markPreviewSubmitted(preview.previewId);
+    const orderRecord = orderRecordFromSubmitResult(preview, submitResult);
+    store.recordOrderSubmission({
+      previewId: preview.previewId,
+      marketKey,
+      orderId: orderRecord.orderId,
+      side: orderRecord.side,
+      status: orderRecord.status,
+      orderKind: orderRecord.orderKind,
+      price: orderRecord.price,
+      size: orderRecord.size,
+      notionalUsd: orderRecord.notionalUsd,
+      payload: orderRecord.payload
+    });
+    deletePreview(preview.previewId);
+    const updatedDecision = writeExecution({
+      status: "submitted",
+      mode: session.mode,
+      decisionId: input.decision_id,
+      previewId: preview.previewId,
+      orderId: orderRecord.orderId,
+      orderStatus: orderRecord.status,
+      createdAt: now
+    });
+    return textResult({
+      session,
+      decision: compactStoredAutoTradingDecision(updatedDecision),
+      gate,
+      previewResult,
+      submitResult,
+      execution: updatedDecision.payload.execution
     });
   }
 );

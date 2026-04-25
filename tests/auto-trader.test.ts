@@ -635,6 +635,59 @@ test("auto-trader execution gate blocks paper sessions from live execution", asy
   });
 });
 
+test("auto-trader decision payload can persist execution audit state", async () => {
+  await withTempStore((store) => {
+    const session = store.createAutoTradingSession({
+      sessionId: "session-audit",
+      mode: "live_guarded",
+      riskProfile: "balanced",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      mandate: {
+        mode: "live_guarded",
+        riskProfile: "balanced",
+        budgetUsdc: 30,
+        timeframeHours: 24
+      }
+    });
+    const decision = store.recordAutoTradingDecision({
+      sessionId: session.sessionId,
+      iterationId: "iteration-1",
+      marketKey: "condition:audit",
+      title: "Audit market",
+      action: "live_buy_yes",
+      status: "proposed",
+      score: 90,
+      allocatedBudgetUsdc: 5,
+      targetPrice: 0.5,
+      payload: {
+        tokenId: "audit-yes",
+        shares: 10
+      }
+    });
+
+    const updated = store.updateAutoTradingDecisionPayload(decision.decisionId, {
+      execution: {
+        status: "awaiting_approval",
+        previewId: "preview-1"
+      },
+      executionHistory: [{
+        status: "awaiting_approval",
+        previewId: "preview-1"
+      }]
+    });
+
+    assert.equal(updated.action, "live_buy_yes");
+    assert.equal(updated.status, "proposed");
+    assert.equal(updated.payload.tokenId, "audit-yes");
+    assert.deepEqual(updated.payload.execution, {
+      status: "awaiting_approval",
+      previewId: "preview-1"
+    });
+    assert.equal((updated.payload.executionHistory as unknown[]).length, 1);
+  });
+});
+
 test("auto-trader includes ending-soon markets beyond the top opportunity pool", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");

@@ -134,6 +134,8 @@ For live modes, decisions become mode-aware:
 - `live_autonomous` emits live decisions that are eligible for autonomous submission only after the standard preview and policy checks pass.
 - `paper` decisions are blocked from live execution by the execution gate.
 
+Use `execute_auto_trading_decision` to apply that mode behavior to a stored decision. It creates the guarded preview, records execution audit state on the decision, stops at `awaiting_approval` for `live_guarded`, and only submits in `live_autonomous` when preview policy, trading config, and credentials all pass.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:
@@ -162,6 +164,7 @@ The bundled MCP server currently exposes:
 - `get_universe_event_clusters`
 - `get_auto_trading_session`
 - `get_auto_trading_execution_gate`
+- `execute_auto_trading_decision`
 - `enrich_universe_markets`
 
 ### Write tools
