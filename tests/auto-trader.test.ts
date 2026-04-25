@@ -233,8 +233,26 @@ test("auto-trader blocks heuristic-only entries until independent fair value exi
     assert.equal(decision?.action, "research_required");
     assert.equal(decision?.status, "research");
     assert.equal(decision?.blockers.includes("missing_independent_forecast"), true);
+    assert.equal(result.summary.researchRequests, 1);
+    assert.equal(result.researchRequests.length, 1);
+    assert.equal(result.researchRequests[0]?.marketKey, "condition:heuristic-only");
+    assert.equal(result.researchRequests[0]?.priority, "high");
+    assert.equal(result.researchRequests[0]?.forecastBlockers.includes("missing_independent_forecast"), true);
+    assert.equal(result.researchRequests[0]?.requiredArtifact.method, "deep_research_forecast_v1");
+    assert.equal(result.researchRequests[0]?.requiredArtifact.requiresCounterEvidence, true);
+    assert.equal(result.researchRequests[0]?.requiredArtifact.forbiddenEvidence.includes("Polymarket odds"), true);
+    assert.equal(result.researchRequests[0]?.marketContext.outcomes.length, 2);
+    assert.equal(decision?.researchRequest?.requestId, result.researchRequests[0]?.requestId);
+    assert.equal(compactAutoTradingIterationResult(result).researchRequests.length, 1);
     assert.equal(result.summary.proposedOrders, 0);
     assert.equal(result.ledger.fills.length, 0);
+
+    const storedDecision = store
+      .listAutoTradingDecisions({ sessionId: result.session.sessionId, marketKey: "condition:heuristic-only", limit: 1 })
+      .at(0);
+    const storedResearchRequest = storedDecision?.payload.researchRequest as Record<string, unknown> | undefined;
+    assert.equal(storedResearchRequest?.marketKey, "condition:heuristic-only");
+    assert.equal(storedResearchRequest?.requiredArtifact && typeof storedResearchRequest.requiredArtifact === "object", true);
   });
 });
 

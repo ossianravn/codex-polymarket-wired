@@ -82,6 +82,7 @@ export interface AutoTradingDecision {
   blockers: string[];
   market: Record<string, unknown>;
   forecastEdge?: AutoTradingForecastEdge;
+  researchRequest?: AutoTradingResearchRequest;
 }
 
 export interface AutoTradingForecastEdge {
@@ -94,6 +95,40 @@ export interface AutoTradingForecastEdge {
   minRequiredEdge: number;
   forecastedAt?: string;
   expiresAt?: string;
+}
+
+export interface AutoTradingResearchRequest {
+  requestId: string;
+  createdAt: string;
+  dueAt: string;
+  priority: "high" | "medium";
+  marketKey: string;
+  title?: string;
+  score: number;
+  forecastBlockers: string[];
+  reasonCodes: string[];
+  requiredArtifact: {
+    method: "deep_research_forecast_v1";
+    minimumEvidenceItems: number;
+    requiresCounterEvidence: true;
+    requiredFields: string[];
+    forbiddenEvidence: string[];
+    freshnessHours: number;
+  };
+  researchQuestion: string;
+  marketContext: {
+    eventTitle?: string;
+    eventSlug?: string;
+    categoryGroup?: string;
+    structuralType?: string;
+    opportunityMode?: string;
+    horizonBucket?: string;
+    endDate?: string;
+    outcomes: string[];
+    resolutionText?: string;
+    resolutionSource?: string;
+    reasonCodes: string[];
+  };
 }
 
 export interface AutoTradingIterationResult {
@@ -119,6 +154,7 @@ export interface AutoTradingIterationResult {
     proposedOrders: number;
     exitOrders: number;
     researchRequired: number;
+    researchRequests: number;
     blocked: number;
     blockerCounts: Record<string, number>;
     riskBlockedNewBuys: boolean;
@@ -127,6 +163,7 @@ export interface AutoTradingIterationResult {
   decisions: StoredAutoTradingDecisionRecord[];
   ledger: StoredPaperTradingLedger;
   candidates: AutoTradingDecision[];
+  researchRequests: AutoTradingResearchRequest[];
 }
 
 export interface AutoTradingExecutionPreviewRequest {
@@ -168,6 +205,7 @@ export interface CompactAutoTradingDecision {
   reasonCodes: string[];
   blockers: string[];
   forecastEdge?: AutoTradingForecastEdge;
+  researchRequest?: AutoTradingResearchRequest;
   market?: {
     eventTitle?: string;
     eventSlug?: string;
@@ -222,6 +260,7 @@ export interface CompactAutoTradingIterationResult {
     | "heartbeatMinutes"
   >;
   candidates: CompactAutoTradingDecision[];
+  researchRequests: AutoTradingResearchRequest[];
 }
 
 export interface AutoTradingSimulationMarket {
@@ -1682,6 +1721,91 @@ function blockerCounts(decisions: AutoTradingDecision[]): Record<string, number>
   );
 }
 
+function forecastResearchBlockers(blockers: string[]): string[] {
+  const forecastBlockers = new Set([
+    "missing_independent_forecast",
+    "invalid_independent_forecast_probability",
+    "independent_forecast_not_sealed",
+    "independent_forecast_screening_only",
+    "independent_forecast_low_confidence_screening",
+    "independent_forecast_price_contaminated",
+    "independent_forecast_missing_numerical_check",
+    "independent_forecast_missing_forecasted_at",
+    "independent_forecast_from_future",
+    "independent_forecast_stale",
+    "independent_forecast_expired"
+  ]);
+  return blockers.filter((blocker) => forecastBlockers.has(blocker));
+}
+
+function buildResearchRequest(
+  decision: AutoTradingDecision,
+  mandate: AutoTradingMandate,
+  iterationId: string,
+  now: Date
+): AutoTradingResearchRequest | undefined {
+  const marketKey = decision.marketKey;
+  if (decision.action !== "research_required" || !marketKey) {
+    return undefined;
+  }
+  const blockers = forecastResearchBlockers(decision.blockers);
+  if (blockers.length === 0) {
+    return undefined;
+  }
+  const dueAt = decision.nextCheckAt ?? addMinutes(now, Math.min(60, mandate.heartbeatMinutes));
+  return {
+    requestId: `research:${iterationId}:${marketKey}`,
+    createdAt: now.toISOString(),
+    dueAt,
+    priority: decision.score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold ? "high" : "medium",
+    marketKey,
+    title: decision.title,
+    score: decision.score,
+    forecastBlockers: blockers,
+    reasonCodes: decision.reasonCodes,
+    requiredArtifact: {
+      method: "deep_research_forecast_v1",
+      minimumEvidenceItems: 2,
+      requiresCounterEvidence: true,
+      requiredFields: [
+        "fairValueLow",
+        "fairValueBase",
+        "fairValueHigh",
+        "supportsYes",
+        "supportsNo",
+        "openQuestions",
+        "providers",
+        "completedAt"
+      ],
+      forbiddenEvidence: [
+        "Polymarket odds",
+        "venue price",
+        "orderbook",
+        "best bid",
+        "best ask",
+        "spread",
+        "recent venue trades",
+        "market-implied probability"
+      ],
+      freshnessHours: Math.max(6, Math.min(24, mandate.timeframeHours))
+    },
+    researchQuestion: decision.title ?? String(decision.market.question ?? decision.market.title ?? marketKey),
+    marketContext: {
+      eventTitle: optionalString(decision.market.eventTitle),
+      eventSlug: optionalString(decision.market.eventSlug),
+      categoryGroup: optionalString(decision.market.categoryGroup),
+      structuralType: optionalString(decision.market.structuralType),
+      opportunityMode: optionalString(decision.market.opportunityMode),
+      horizonBucket: optionalString(decision.market.horizonBucket),
+      endDate: optionalString(decision.market.endDate),
+      outcomes: asStringArray(decision.market.outcomes),
+      resolutionText: optionalString(decision.market.resolutionText),
+      resolutionSource: optionalString(decision.market.resolutionSource),
+      reasonCodes: asStringArray(decision.market.reasonCodes)
+    }
+  };
+}
+
 export function compactAutoTradingDecision(decision: AutoTradingDecision): CompactAutoTradingDecision {
   return {
     marketKey: decision.marketKey,
@@ -1697,6 +1821,7 @@ export function compactAutoTradingDecision(decision: AutoTradingDecision): Compa
     reasonCodes: decision.reasonCodes,
     blockers: decision.blockers,
     forecastEdge: decision.forecastEdge,
+    researchRequest: decision.researchRequest,
     market: Object.keys(decision.market).length > 0
       ? {
         eventTitle: optionalString(decision.market.eventTitle),
@@ -1762,7 +1887,8 @@ export function compactAutoTradingIterationResult(
       timeExitHours: result.mandate.timeExitHours,
       heartbeatMinutes: result.mandate.heartbeatMinutes
     },
-    candidates: result.candidates.map(compactAutoTradingDecision)
+    candidates: result.candidates.map(compactAutoTradingDecision),
+    researchRequests: result.researchRequests
   };
 }
 
@@ -1906,6 +2032,7 @@ export function runAutoTradingIteration(
         proposedOrders: 0,
         exitOrders: 0,
         researchRequired: 0,
+        researchRequests: 0,
         blocked: 1,
         blockerCounts: blockerCounts([decision]),
         riskBlockedNewBuys,
@@ -1913,7 +2040,8 @@ export function runAutoTradingIteration(
       },
       decisions: stored,
       ledger,
-      candidates: [decision]
+      candidates: [decision],
+      researchRequests: []
     };
   }
 
@@ -2121,7 +2249,13 @@ export function runAutoTradingIteration(
       };
     }
     return decision;
-  });
+  }).map((decision) => ({
+    ...decision,
+    researchRequest: buildResearchRequest(decision, mandate, iterationId, now)
+  }));
+  const researchRequests = cappedDecisions
+    .map((decision) => decision.researchRequest)
+    .filter((request): request is AutoTradingResearchRequest => Boolean(request));
 
   const stored = persist
     ? cappedDecisions.map((decision) => store.recordAutoTradingDecision({
@@ -2143,6 +2277,7 @@ export function runAutoTradingIteration(
         mode: mandate.mode,
         liveSubmissionEnabled: false,
         forecastEdge: decision.forecastEdge,
+        researchRequest: decision.researchRequest,
         market: decision.market
       }
     }))
@@ -2291,6 +2426,7 @@ export function runAutoTradingIteration(
       proposedOrders: cappedDecisions.filter((decision) => isEntryAction(decision.action)).length,
       exitOrders: cappedDecisions.filter((decision) => isExitAction(decision.action)).length,
       researchRequired: cappedDecisions.filter((decision) => decision.action === "research_required").length,
+      researchRequests: researchRequests.length,
       blocked: cappedDecisions.filter((decision) => decision.status === "blocked").length,
       blockerCounts: blockerCounts(cappedDecisions),
       riskBlockedNewBuys,
@@ -2298,7 +2434,8 @@ export function runAutoTradingIteration(
     },
     decisions: stored,
     ledger,
-    candidates: cappedDecisions
+    candidates: cappedDecisions,
+    researchRequests
   };
 }
 
