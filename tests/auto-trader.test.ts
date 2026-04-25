@@ -663,6 +663,110 @@ test("auto-trader leaves sub-minimum leftover budget idle instead of creating du
   });
 });
 
+test("auto-trader exits legacy dust paper positions during hygiene cleanup", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const sessionBootstrap = runAutoTradingIteration(store, {
+      now,
+      mandate: {
+        budgetUsdc: 5,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        minOrderUsdc: 1
+      }
+    });
+
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:legacy-dust",
+      conditionId: "legacy-dust",
+      slug: "legacy-dust",
+      eventSlug: "legacy-dust-event",
+      eventTitle: "legacy dust event",
+      title: "Legacy dust market",
+      category: "crypto",
+      tags: ["crypto"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.5, 0.5],
+      clobTokenIds: ["legacy-dust:yes", "legacy-dust:no"],
+      yesTokenId: "legacy-dust:yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 10_000,
+      impliedProb: 0.5,
+      bestBid: 0.5,
+      bestAsk: 0.52,
+      midpoint: 0.51,
+      spreadCents: 2,
+      categoryGroup: "crypto",
+      structuralType: "threshold-range",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 50,
+      crossMarketScore: 20,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: 95,
+      makerScore: 50,
+      riskScore: 10,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {}
+    }]);
+
+    store.recordPaperTradingFill({
+      sessionId: sessionBootstrap.session.sessionId,
+      marketKey: "condition:legacy-dust",
+      title: "Legacy dust market",
+      side: "buy_yes",
+      price: 0.5,
+      shares: 1,
+      costUsdc: 0.5,
+      filledAt: now.toISOString(),
+      metadata: {
+        eventKey: "eventSlug:legacy-dust-event",
+        tokenId: "legacy-dust:yes",
+        score: 95,
+        mode: "paper",
+        endDate: isoAfter(now, 12)
+      }
+    });
+
+    const result = runAutoTradingIteration(store, {
+      sessionId: sessionBootstrap.session.sessionId,
+      now: new Date(now.getTime() + 60 * 1000),
+      limit: 4
+    });
+
+    const hygieneExit = result.candidates.find((candidate) => candidate.action === "paper_sell_yes");
+    assert.equal(result.summary.exitOrders, 1);
+    assert.equal(hygieneExit?.marketKey, "condition:legacy-dust");
+    assert.ok(hygieneExit?.reasonCodes.includes("paper_hygiene_dust_position"));
+    assert.equal(result.ledger.summary.openPositionCount, 0);
+    assert.equal(result.ledger.summary.closedPositionCount, 1);
+    assert.equal(result.ledger.summary.remainingBudgetUsdc, 5);
+  });
+});
+
 test("auto-trader rotates paper budget by exiting weak positions for stronger candidates", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");

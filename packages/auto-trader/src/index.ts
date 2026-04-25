@@ -821,6 +821,107 @@ function buildPaperRotationExitDecision(
   };
 }
 
+function weakPositionScoreSlack(riskProfile: AutoTradingRiskProfile): number {
+  switch (riskProfile) {
+    case "aggressive":
+      return 6;
+    case "balanced":
+      return 10;
+    case "conservative":
+      return 14;
+  }
+}
+
+function buildPaperHygieneExitDecisions(
+  ledger: StoredPaperTradingLedger,
+  mandate: AutoTradingMandate,
+  now: Date,
+  candidates: AutoTradingDecision[],
+  existingExitMarketKeys: Set<string>
+): AutoTradingDecision[] {
+  if (mandate.mode !== "paper") {
+    return [];
+  }
+
+  const capitalConstrained =
+    ledger.summary.remainingBudgetUsdc < mandate.minOrderUsdc ||
+    ledger.summary.openPositionCount >= mandate.maxOpenPositions ||
+    candidates.some((candidate) => candidate.blockers.includes("budget_exhausted"));
+  const proposalThreshold = RISK_DEFAULTS[mandate.riskProfile].proposalThreshold;
+  const weakScoreCutoff = proposalThreshold - weakPositionScoreSlack(mandate.riskProfile);
+
+  return ledger.positions
+    .filter((position) =>
+      position.status === "open" &&
+      !existingExitMarketKeys.has(position.marketKey) &&
+      position.currentPrice !== undefined &&
+      position.currentValueUsdc !== undefined &&
+      position.shares > 0
+    )
+    .map((position) => {
+      const entryScore = paperPositionEntryScore(position);
+      const currentValueUsdc = position.currentValueUsdc as number;
+      const reasonCodes: string[] = [];
+      if (currentValueUsdc < mandate.minOrderUsdc) {
+        reasonCodes.push("paper_hygiene_dust_position");
+      } else if (
+        capitalConstrained &&
+        entryScore < weakScoreCutoff &&
+        (position.unrealizedPnlPct ?? 0) <= 0
+      ) {
+        reasonCodes.push("paper_hygiene_weak_losing_position");
+      }
+      return { position, entryScore, reasonCodes };
+    })
+    .filter((entry) => entry.reasonCodes.length > 0)
+    .sort((left, right) => {
+      const dustDelta = (left.position.currentValueUsdc as number) - (right.position.currentValueUsdc as number);
+      if (left.reasonCodes.includes("paper_hygiene_dust_position") || right.reasonCodes.includes("paper_hygiene_dust_position")) {
+        return dustDelta;
+      }
+      const rankDelta = paperPositionRotationRank(left.position) - paperPositionRotationRank(right.position);
+      return rankDelta !== 0 ? rankDelta : dustDelta;
+    })
+    .slice(0, 2)
+    .map(({ position, entryScore, reasonCodes }) => {
+      const market = {
+        marketKey: position.marketKey,
+        title: position.title,
+        eventKey: position.metadata.eventKey,
+        endDate: position.metadata.endDate,
+        currentPrice: position.currentPrice,
+        averagePrice: position.averagePrice,
+        shares: position.shares,
+        currentValueUsdc: position.currentValueUsdc,
+        unrealizedPnlPct: position.unrealizedPnlPct,
+        unrealizedPnlUsdc: position.unrealizedPnlUsdc
+      };
+      const decision = {
+        marketKey: position.marketKey,
+        title: position.title,
+        action: exitActionForMode(mandate.mode),
+        status: "proposed" as const,
+        score: reasonCodes.includes("paper_hygiene_dust_position") ? 95 : 70,
+        allocatedBudgetUsdc: roundMoney(position.currentValueUsdc as number),
+        targetPrice: position.currentPrice,
+        shares: position.shares,
+        tokenId: typeof position.metadata.tokenId === "string" ? position.metadata.tokenId : undefined,
+        reasonCodes: [
+          "paper_position_hygiene",
+          ...reasonCodes,
+          `position_score:${Number(entryScore.toFixed(2))}`
+        ],
+        blockers: [],
+        market
+      } satisfies AutoTradingDecision;
+
+      return {
+        ...decision,
+        nextCheckAt: nextCheckForDecision(decision, mandate, now)
+      };
+    });
+}
+
 function buildBudgetRotationExitDecisions(
   ledger: StoredPaperTradingLedger,
   mandate: AutoTradingMandate,
@@ -1384,6 +1485,20 @@ export function runAutoTradingIteration(
     .slice(0, limit);
 
   const rotationExitMarketKeys = new Set(exitDecisions.map((decision) => decision.marketKey).filter((value): value is string => Boolean(value)));
+  const hygieneExitDecisions = mandate.mode === "paper"
+    ? buildPaperHygieneExitDecisions(
+      ledger,
+      mandate,
+      now,
+      decisions,
+      rotationExitMarketKeys
+    )
+    : [];
+  for (const decision of hygieneExitDecisions) {
+    if (decision.marketKey) {
+      rotationExitMarketKeys.add(decision.marketKey);
+    }
+  }
   const eventRotationExitDecisions = mandate.mode === "paper"
     ? buildEventRotationExitDecisions(
       ledger,
@@ -1409,7 +1524,12 @@ export function runAutoTradingIteration(
       rotationExitMarketKeys
     )
     : [];
-  exitDecisions = [...exitDecisions, ...eventRotationExitDecisions, ...budgetRotationExitDecisions];
+  exitDecisions = [
+    ...exitDecisions,
+    ...hygieneExitDecisions,
+    ...eventRotationExitDecisions,
+    ...budgetRotationExitDecisions
+  ];
   const openPositionsAfterExits = Math.max(0, ledger.summary.openPositionCount - exitDecisions.length);
   const allowedNewBuys = Math.max(0, mandate.maxOpenPositions - openPositionsAfterExits);
   let proposedBuyCount = 0;
