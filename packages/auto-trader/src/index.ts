@@ -474,6 +474,249 @@ function actionSide(action: AutoTradingAction): "BUY" | "SELL" | undefined {
   return undefined;
 }
 
+type PaperExecutionStatus = "filled" | "partial_filled" | "missed" | "expired" | "rejected";
+
+interface PaperExecutionResult {
+  status: PaperExecutionStatus;
+  side?: "buy_yes" | "sell_yes";
+  limitPrice: number;
+  requestedShares: number;
+  requestedNotionalUsdc: number;
+  fillPrice?: number;
+  filledShares: number;
+  filledNotionalUsdc: number;
+  reasonCodes: string[];
+  warnings: string[];
+  metadata: Record<string, unknown>;
+}
+
+function paperTradingSideForAction(action: AutoTradingAction): "buy_yes" | "sell_yes" | undefined {
+  if (action === "paper_buy_yes") {
+    return "buy_yes";
+  }
+  if (action === "paper_sell_yes") {
+    return "sell_yes";
+  }
+  return undefined;
+}
+
+function marketTimestampMs(market: Record<string, unknown>): number | undefined {
+  const raw = market.capturedAt ?? market.updatedAt ?? market.updated_at ?? market.createdAt ?? market.created_at;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return undefined;
+  }
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function availablePaperDepthUsdc(
+  market: Record<string, unknown>,
+  requestedNotionalUsdc: number,
+  executionKind: "taker" | "maker"
+): number {
+  const explicitDepth = asNumber(market.depthUsdWithin2c) ?? asNumber(market.depth_usd_within_2c);
+  if (explicitDepth !== undefined) {
+    return Math.max(0, explicitDepth);
+  }
+  const liquidityUsd = asNumber(market.liquidityUsd) ?? asNumber(market.liquidity_usd) ?? 0;
+  const volume24hUsd = asNumber(market.volume24hUsd) ?? asNumber(market.volume_24h_usd) ?? 0;
+  if (liquidityUsd <= 0 && volume24hUsd <= 0) {
+    return executionKind === "taker" ? requestedNotionalUsdc : 0;
+  }
+  const liquidityFraction = executionKind === "taker" ? 0.005 : 0.002;
+  const volumeFraction = executionKind === "taker" ? 0.02 : 0.01;
+  const estimated = Math.max(liquidityUsd * liquidityFraction, volume24hUsd * volumeFraction);
+  return Math.max(0, estimated);
+}
+
+function simulatePaperExecution(decision: AutoTradingDecision, now: Date): PaperExecutionResult {
+  const side = paperTradingSideForAction(decision.action);
+  const limitPrice = clampProbability(decision.targetPrice ?? 0);
+  const requestedShares = roundShares(Math.max(0, decision.shares ?? 0));
+  const requestedNotionalUsdc = roundMoney(Math.max(
+    0,
+    decision.allocatedBudgetUsdc ?? requestedShares * limitPrice
+  ));
+  const bestBid = asNumber(decision.market.bestBid) ?? asNumber(decision.market.best_bid);
+  const bestAsk = asNumber(decision.market.bestAsk) ?? asNumber(decision.market.best_ask);
+  const spreadCents = asNumber(decision.market.spreadCents) ?? asNumber(decision.market.spread_cents);
+  const volume24hUsd = asNumber(decision.market.volume24hUsd) ?? asNumber(decision.market.volume_24h_usd) ?? 0;
+  const liquidityUsd = asNumber(decision.market.liquidityUsd) ?? asNumber(decision.market.liquidity_usd) ?? 0;
+  const timestampMs = marketTimestampMs(decision.market);
+  const snapshotAgeMinutes = timestampMs === undefined
+    ? undefined
+    : Math.max(0, (now.getTime() - timestampMs) / 60_000);
+  const reasonCodes: string[] = [];
+  const warnings: string[] = [];
+
+  if (!side || requestedShares <= 0 || requestedNotionalUsdc <= 0) {
+    return {
+      status: "rejected",
+      side,
+      limitPrice,
+      requestedShares,
+      requestedNotionalUsdc,
+      filledShares: 0,
+      filledNotionalUsdc: 0,
+      reasonCodes: ["invalid_paper_order"],
+      warnings,
+      metadata: {
+        executionModel: "paper_execution_v1",
+        bestBid,
+        bestAsk,
+        spreadCents,
+        volume24hUsd,
+        liquidityUsd,
+        snapshotAgeMinutes
+      }
+    };
+  }
+
+  if (snapshotAgeMinutes !== undefined && snapshotAgeMinutes > 30) {
+    return {
+      status: "missed",
+      side,
+      limitPrice,
+      requestedShares,
+      requestedNotionalUsdc,
+      filledShares: 0,
+      filledNotionalUsdc: 0,
+      reasonCodes: ["stale_market_snapshot"],
+      warnings: [`market_snapshot_age_minutes:${Math.round(snapshotAgeMinutes)}`],
+      metadata: {
+        executionModel: "paper_execution_v1",
+        bestBid,
+        bestAsk,
+        spreadCents,
+        volume24hUsd,
+        liquidityUsd,
+        snapshotAgeMinutes
+      }
+    };
+  }
+
+  let fillPrice: number | undefined;
+  let executionKind: "taker" | "maker" | undefined;
+  if (side === "buy_yes") {
+    if (bestAsk !== undefined && limitPrice >= bestAsk) {
+      fillPrice = bestAsk;
+      executionKind = "taker";
+      reasonCodes.push("crossed_best_ask");
+    } else if (
+      bestBid !== undefined &&
+      limitPrice >= bestBid &&
+      (spreadCents ?? 999) <= 2 &&
+      (volume24hUsd >= 1_000 || liquidityUsd >= 10_000)
+    ) {
+      fillPrice = limitPrice;
+      executionKind = "maker";
+      reasonCodes.push("tight_spread_passive_fill");
+    }
+  } else if (side === "sell_yes") {
+    if (bestBid !== undefined && limitPrice <= bestBid) {
+      fillPrice = bestBid;
+      executionKind = "taker";
+      reasonCodes.push("crossed_best_bid");
+    } else if (
+      bestAsk !== undefined &&
+      limitPrice <= bestAsk &&
+      (spreadCents ?? 999) <= 2 &&
+      (volume24hUsd >= 1_000 || liquidityUsd >= 10_000)
+    ) {
+      fillPrice = limitPrice;
+      executionKind = "maker";
+      reasonCodes.push("tight_spread_passive_fill");
+    } else if (bestBid === undefined && bestAsk === undefined && decision.targetPrice !== undefined) {
+      fillPrice = limitPrice;
+      executionKind = "taker";
+      reasonCodes.push("marked_position_exit");
+    }
+  }
+
+  if (fillPrice === undefined || executionKind === undefined) {
+    return {
+      status: "missed",
+      side,
+      limitPrice,
+      requestedShares,
+      requestedNotionalUsdc,
+      filledShares: 0,
+      filledNotionalUsdc: 0,
+      reasonCodes: ["limit_not_executable"],
+      warnings,
+      metadata: {
+        executionModel: "paper_execution_v1",
+        bestBid,
+        bestAsk,
+        spreadCents,
+        volume24hUsd,
+        liquidityUsd,
+        snapshotAgeMinutes
+      }
+    };
+  }
+
+  const availableNotionalUsdc = availablePaperDepthUsdc(decision.market, requestedNotionalUsdc, executionKind);
+  const filledNotionalUsdc = roundMoney(Math.min(requestedNotionalUsdc, availableNotionalUsdc));
+  if (filledNotionalUsdc <= 0) {
+    return {
+      status: "missed",
+      side,
+      limitPrice,
+      requestedShares,
+      requestedNotionalUsdc,
+      fillPrice,
+      filledShares: 0,
+      filledNotionalUsdc: 0,
+      reasonCodes: [...reasonCodes, "insufficient_paper_depth"],
+      warnings,
+      metadata: {
+        executionModel: "paper_execution_v1",
+        executionKind,
+        bestBid,
+        bestAsk,
+        spreadCents,
+        volume24hUsd,
+        liquidityUsd,
+        snapshotAgeMinutes,
+        availableNotionalUsdc
+      }
+    };
+  }
+
+  const status: PaperExecutionStatus =
+    filledNotionalUsdc + 0.000001 >= requestedNotionalUsdc ? "filled" : "partial_filled";
+  const filledShares = side === "sell_yes" && status === "filled"
+    ? requestedShares
+    : roundShares(filledNotionalUsdc / Math.max(0.000001, fillPrice));
+  if (status === "partial_filled") {
+    warnings.push("partial_fill_due_to_depth_limit");
+  }
+  return {
+    status,
+    side,
+    limitPrice,
+    requestedShares,
+    requestedNotionalUsdc,
+    fillPrice,
+    filledShares,
+    filledNotionalUsdc,
+    reasonCodes,
+    warnings,
+    metadata: {
+      executionModel: "paper_execution_v1",
+      executionKind,
+      bestBid,
+      bestAsk,
+      spreadCents,
+      volume24hUsd,
+      liquidityUsd,
+      snapshotAgeMinutes,
+      availableNotionalUsdc
+    }
+  };
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
 }
@@ -1812,7 +2055,40 @@ export function runAutoTradingIteration(
       if (!decision.marketKey || decision.targetPrice === undefined || !decision.shares || !storedDecision) {
         return;
       }
-      if (decision.action === "paper_buy_yes" && decision.allocatedBudgetUsdc) {
+      const paperSide = paperTradingSideForAction(decision.action);
+      if (!paperSide) {
+        return;
+      }
+      const execution = simulatePaperExecution(decision, now);
+      const paperOrder = store.recordPaperTradingOrder({
+        sessionId: session.sessionId,
+        iterationId,
+        decisionId: storedDecision.decisionId,
+        marketKey: decision.marketKey,
+        title: decision.title,
+        side: paperSide,
+        limitPrice: execution.limitPrice,
+        requestedShares: execution.requestedShares,
+        requestedNotionalUsdc: execution.requestedNotionalUsdc,
+        filledShares: execution.filledShares,
+        filledNotionalUsdc: execution.filledNotionalUsdc,
+        status: execution.status,
+        createdAt: now.toISOString(),
+        expiresAt: decision.nextCheckAt,
+        metadata: {
+          ...execution.metadata,
+          reasonCodes: execution.reasonCodes,
+          warnings: execution.warnings,
+          score: decision.score,
+          forecastEdge: decision.forecastEdge,
+          tokenId: decision.tokenId,
+          endDate: decision.market.endDate
+        }
+      });
+      if (execution.filledShares <= 0 || execution.filledNotionalUsdc <= 0 || execution.fillPrice === undefined) {
+        return;
+      }
+      if (decision.action === "paper_buy_yes") {
         store.recordPaperTradingFill({
           sessionId: session.sessionId,
           iterationId,
@@ -1820,9 +2096,9 @@ export function runAutoTradingIteration(
           marketKey: decision.marketKey,
           title: decision.title,
           side: "buy_yes",
-          price: decision.targetPrice,
-          shares: decision.shares,
-          costUsdc: decision.allocatedBudgetUsdc,
+          price: execution.fillPrice,
+          shares: execution.filledShares,
+          costUsdc: execution.filledNotionalUsdc,
           filledAt: now.toISOString(),
           metadata: {
             eventKey: eventIdentity(decision.market),
@@ -1830,11 +2106,15 @@ export function runAutoTradingIteration(
             score: decision.score,
             mode: mandate.mode,
             forecastEdge: decision.forecastEdge,
-            endDate: decision.market.endDate
+            endDate: decision.market.endDate,
+            paperOrderId: paperOrder.paperOrderId,
+            paperExecution: execution.metadata,
+            paperExecutionReasonCodes: execution.reasonCodes,
+            paperExecutionWarnings: execution.warnings
           }
         });
       }
-      if (decision.action === "paper_sell_yes" && decision.allocatedBudgetUsdc !== undefined) {
+      if (decision.action === "paper_sell_yes") {
         store.recordPaperTradingFill({
           sessionId: session.sessionId,
           iterationId,
@@ -1842,9 +2122,9 @@ export function runAutoTradingIteration(
           marketKey: decision.marketKey,
           title: decision.title,
           side: "sell_yes",
-          price: decision.targetPrice,
-          shares: decision.shares,
-          costUsdc: decision.allocatedBudgetUsdc,
+          price: execution.fillPrice,
+          shares: execution.filledShares,
+          costUsdc: execution.filledNotionalUsdc,
           filledAt: now.toISOString(),
           metadata: {
             eventKey: decision.market.eventKey ?? eventIdentity(decision.market),
@@ -1852,7 +2132,11 @@ export function runAutoTradingIteration(
             score: decision.score,
             mode: mandate.mode,
             exitReasonCodes: decision.reasonCodes,
-            endDate: decision.market.endDate
+            endDate: decision.market.endDate,
+            paperOrderId: paperOrder.paperOrderId,
+            paperExecution: execution.metadata,
+            paperExecutionReasonCodes: execution.reasonCodes,
+            paperExecutionWarnings: execution.warnings
           }
         });
       }

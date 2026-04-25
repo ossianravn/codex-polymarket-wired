@@ -357,6 +357,90 @@ test("auto-trader persists paper fills and spends from ledger on later iteration
   });
 });
 
+test("auto-trader records missed paper orders without spending ledger budget", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "composite",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:wide-paper-miss",
+      conditionId: "wide-paper-miss",
+      slug: "wide-paper-miss",
+      eventSlug: "paper-miss-event",
+      eventTitle: "Paper miss event",
+      title: "Wide paper miss market",
+      category: "sports",
+      tags: ["sports"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.4, 0.6],
+      clobTokenIds: ["wide-miss-yes", "wide-miss-no"],
+      yesTokenId: "wide-miss-yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 40_000,
+      volume24hUsd: 90_000,
+      impliedProb: 0.4,
+      bestBid: 0.38,
+      bestAsk: 0.42,
+      midpoint: 0.4,
+      spreadCents: 4,
+      categoryGroup: "sports",
+      structuralType: "live-sports",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "wide-3-8c",
+      opportunityMode: "resolution-watch",
+      modelabilityScore: 80,
+      tradabilityScore: 82,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 55,
+      crossMarketScore: 20,
+      researchPriorityScore: 82,
+      tradeOpportunityScore: 92,
+      makerScore: 50,
+      riskScore: 15,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: independentForecastRawJson(0.4)
+    }]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 10,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper",
+        maxSingleOrderUsdc: 6,
+        maxSpreadCents: 8
+      }
+    });
+
+    assert.equal(result.candidates[0]?.action, "paper_buy_yes");
+    assert.equal(result.summary.proposedOrders, 1);
+    assert.equal(result.summary.spentUsdc, 0);
+    assert.equal(result.summary.remainingBudgetUsdc, 10);
+    assert.equal(result.ledger.fills.length, 0);
+    assert.equal(result.ledger.positions.length, 0);
+    assert.equal(result.ledger.orders?.length, 1);
+    assert.equal(result.ledger.orders?.[0]?.status, "missed");
+    assert.deepEqual(result.ledger.orders?.[0]?.metadata.reasonCodes, ["limit_not_executable"]);
+  });
+});
+
 test("auto-trader exits paper positions on take profit and realizes PnL", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");

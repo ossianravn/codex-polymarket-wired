@@ -286,6 +286,44 @@ export interface StoredPaperTradingFillRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface StoredPaperTradingOrderInput {
+  paperOrderId?: string;
+  sessionId: string;
+  iterationId?: string;
+  decisionId?: string;
+  marketKey: string;
+  title?: string;
+  side: "buy_yes" | "sell_yes";
+  limitPrice: number;
+  requestedShares: number;
+  requestedNotionalUsdc: number;
+  filledShares?: number;
+  filledNotionalUsdc?: number;
+  status: "filled" | "partial_filled" | "missed" | "expired" | "rejected";
+  createdAt?: string;
+  expiresAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StoredPaperTradingOrderRecord {
+  paperOrderId: string;
+  sessionId: string;
+  iterationId?: string;
+  decisionId?: string;
+  marketKey: string;
+  title?: string;
+  side: string;
+  limitPrice: number;
+  requestedShares: number;
+  requestedNotionalUsdc: number;
+  filledShares: number;
+  filledNotionalUsdc: number;
+  status: string;
+  createdAt: string;
+  expiresAt?: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface StoredPaperTradingPositionRecord {
   positionId: string;
   sessionId: string;
@@ -329,6 +367,7 @@ export interface StoredPaperTradingLedger {
   summary: StoredPaperTradingLedgerSummary;
   positions: StoredPaperTradingPositionRecord[];
   fills: StoredPaperTradingFillRecord[];
+  orders?: StoredPaperTradingOrderRecord[];
 }
 
 export interface StoredUniverseRunInput {
@@ -911,6 +950,28 @@ function paperTradingFillRowToRecord(row: unknown): StoredPaperTradingFillRecord
   } satisfies StoredPaperTradingFillRecord;
 }
 
+function paperTradingOrderRowToRecord(row: unknown): StoredPaperTradingOrderRecord {
+  const record = rowRecord(row);
+  return {
+    paperOrderId: String(record.paper_order_id ?? ""),
+    sessionId: String(record.session_id ?? ""),
+    iterationId: typeof record.iteration_id === "string" ? record.iteration_id : undefined,
+    decisionId: typeof record.decision_id === "string" ? record.decision_id : undefined,
+    marketKey: String(record.market_key ?? ""),
+    title: typeof record.title === "string" ? record.title : undefined,
+    side: String(record.side ?? "buy_yes"),
+    limitPrice: asNumber(record.limit_price) ?? 0,
+    requestedShares: asNumber(record.requested_shares) ?? 0,
+    requestedNotionalUsdc: asNumber(record.requested_notional_usdc) ?? 0,
+    filledShares: asNumber(record.filled_shares) ?? 0,
+    filledNotionalUsdc: asNumber(record.filled_notional_usdc) ?? 0,
+    status: String(record.status ?? "missed"),
+    createdAt: String(record.created_at ?? ""),
+    expiresAt: typeof record.expires_at === "string" ? record.expires_at : undefined,
+    metadata: parseJson<Record<string, unknown>>(record.metadata_json, {})
+  } satisfies StoredPaperTradingOrderRecord;
+}
+
 function paperTradingPositionRowToRecord(row: unknown): StoredPaperTradingPositionRecord {
   const record = rowRecord(row);
   return {
@@ -1482,6 +1543,28 @@ export class StateStore {
       );
       CREATE INDEX IF NOT EXISTS idx_paper_trading_fills_session_time ON paper_trading_fills(session_id, filled_at DESC);
       CREATE INDEX IF NOT EXISTS idx_paper_trading_fills_market_time ON paper_trading_fills(market_key, filled_at DESC);
+
+      CREATE TABLE IF NOT EXISTS paper_trading_orders (
+        paper_order_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        iteration_id TEXT,
+        decision_id TEXT UNIQUE,
+        market_key TEXT NOT NULL,
+        title TEXT,
+        side TEXT NOT NULL,
+        limit_price REAL NOT NULL,
+        requested_shares REAL NOT NULL,
+        requested_notional_usdc REAL NOT NULL,
+        filled_shares REAL NOT NULL DEFAULT 0,
+        filled_notional_usdc REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY(session_id) REFERENCES auto_trading_sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_paper_trading_orders_session_status_time ON paper_trading_orders(session_id, status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_paper_trading_orders_market_time ON paper_trading_orders(market_key, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS paper_trading_positions (
         position_id TEXT PRIMARY KEY,
@@ -3080,6 +3163,83 @@ export class StateStore {
     return rows.map((row) => autoTradingDecisionRowToRecord(row));
   }
 
+  recordPaperTradingOrder(input: StoredPaperTradingOrderInput): StoredPaperTradingOrderRecord {
+    if (input.decisionId) {
+      const existing = this.db.prepare(`
+        SELECT *
+        FROM paper_trading_orders
+        WHERE decision_id = ?
+        LIMIT 1
+      `).get(input.decisionId);
+      if (existing) {
+        return paperTradingOrderRowToRecord(existing);
+      }
+    }
+
+    const paperOrderId = input.paperOrderId ?? randomUUID();
+    const createdAt = input.createdAt ?? nowIso();
+    const limitPrice = Math.max(0, Math.min(1, input.limitPrice));
+    const requestedShares = Math.max(0, input.requestedShares);
+    const requestedNotionalUsdc = Math.max(0, input.requestedNotionalUsdc);
+    const filledShares = Math.max(0, input.filledShares ?? 0);
+    const filledNotionalUsdc = Math.max(0, input.filledNotionalUsdc ?? 0);
+    this.db.prepare(`
+      INSERT INTO paper_trading_orders (
+        paper_order_id, session_id, iteration_id, decision_id, market_key, title, side,
+        limit_price, requested_shares, requested_notional_usdc, filled_shares,
+        filled_notional_usdc, status, created_at, expires_at, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      paperOrderId,
+      input.sessionId,
+      input.iterationId ?? null,
+      input.decisionId ?? null,
+      input.marketKey,
+      input.title ?? null,
+      input.side,
+      limitPrice,
+      requestedShares,
+      requestedNotionalUsdc,
+      filledShares,
+      filledNotionalUsdc,
+      input.status,
+      createdAt,
+      input.expiresAt ?? null,
+      jsonString(input.metadata ?? {}, {})
+    );
+
+    const row = this.db.prepare(`
+      SELECT *
+      FROM paper_trading_orders
+      WHERE paper_order_id = ?
+      LIMIT 1
+    `).get(paperOrderId);
+    return paperTradingOrderRowToRecord(row);
+  }
+
+  listPaperTradingOrders(args: {
+    sessionId: string;
+    status?: "filled" | "partial_filled" | "missed" | "expired" | "rejected";
+    limit?: number;
+  }): StoredPaperTradingOrderRecord[] {
+    const limit = Math.max(1, Math.min(1000, args.limit ?? 100));
+    const where = ["session_id = ?"];
+    const params: SqlPrimitive[] = [args.sessionId];
+    if (args.status) {
+      where.push("status = ?");
+      params.push(args.status);
+    }
+    params.push(limit);
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM paper_trading_orders
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, paper_order_id DESC
+      LIMIT ?
+    `).all(...params);
+    return rows.map((row) => paperTradingOrderRowToRecord(row));
+  }
+
   recordPaperTradingFill(input: StoredPaperTradingFillInput): StoredPaperTradingFillRecord {
     if (input.decisionId) {
       const existing = this.db.prepare(`
@@ -3335,6 +3495,7 @@ export class StateStore {
 
   getPaperTradingLedger(sessionId: string): StoredPaperTradingLedger {
     const session = this.getAutoTradingSession(sessionId);
+    const orders = this.listPaperTradingOrders({ sessionId, limit: 1000 });
     const positions = this.listPaperTradingPositions({ sessionId, limit: 1000 });
     const fills = this.listPaperTradingFills({ sessionId, limit: 1000 });
     const grossBuyCostUsdc = fills
@@ -3377,7 +3538,8 @@ export class StateStore {
         portfolioValueUsdc: Number((remainingBudgetUsdc + positionValueUsdc).toFixed(6))
       },
       positions,
-      fills
+      fills,
+      orders
     };
   }
 
@@ -3849,6 +4011,7 @@ export class StateStore {
       agentRuns: this.preparedCount("agent_runs"),
       autoTradingSessions: this.preparedCount("auto_trading_sessions"),
       autoTradingDecisions: this.preparedCount("auto_trading_decisions"),
+      paperTradingOrders: this.preparedCount("paper_trading_orders"),
       paperTradingFills: this.preparedCount("paper_trading_fills"),
       paperTradingPositions: this.preparedCount("paper_trading_positions")
     } satisfies Record<string, number>;
