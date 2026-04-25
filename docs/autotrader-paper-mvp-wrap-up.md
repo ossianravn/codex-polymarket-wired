@@ -67,6 +67,13 @@ Use direct local binaries in this environment because global `npm` can point at 
 node --import tsx .\scripts\universe-discovery.ts
 ```
 
+If repeated discovery runs have made the local dev database large, prune old universe scan rows while keeping the latest completed runs:
+
+```powershell
+node --import tsx .\scripts\state-maintenance.ts --dry-run
+node --import tsx .\scripts\state-maintenance.ts --keep-latest-universe-runs 3
+```
+
 2. Run one paper autotrader iteration.
 
 ```powershell

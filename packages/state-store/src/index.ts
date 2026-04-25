@@ -416,6 +416,36 @@ export interface StoredUniverseRunInput {
   error?: string;
 }
 
+export interface StoredUniverseRetentionInput {
+  keepLatestCompletedRuns?: number;
+  maxCompletedRunAgeHours?: number;
+  maxIncompleteRunAgeHours?: number;
+  dryRun?: boolean;
+  now?: string;
+}
+
+export interface StoredUniverseRetentionResult {
+  generatedAt: string;
+  dryRun: boolean;
+  keepLatestCompletedRuns: number;
+  maxCompletedRunAgeHours?: number;
+  maxIncompleteRunAgeHours?: number;
+  protectedCompletedRunIds: string[];
+  candidateRunIds: string[];
+  candidateUniverseMarkets: number;
+  deletedRunIds: string[];
+  deletedRuns: number;
+  deletedUniverseMarkets: number;
+  before: {
+    universeRuns: number;
+    universeMarkets: number;
+  };
+  after: {
+    universeRuns: number;
+    universeMarkets: number;
+  };
+}
+
 export interface StoredUniverseMarketInput {
   runId: string;
   marketKey: string;
@@ -1158,6 +1188,14 @@ function median(values: number[]): number | undefined {
   }
   const left = sorted[midpoint - 1] ?? right;
   return Number(((left + right) / 2).toFixed(6));
+}
+
+function chunkStrings(values: string[], size: number): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function isOutsiderMarket(
@@ -2174,6 +2212,119 @@ export class StateStore {
       LIMIT 1
     `).get(runId);
     return row ? universeRunRowToRecord(row) : null;
+  }
+
+  pruneUniverseRuns(input: StoredUniverseRetentionInput = {}): StoredUniverseRetentionResult {
+    const generatedAt = input.now ?? nowIso();
+    const nowMs = Number.isFinite(Date.parse(generatedAt)) ? Date.parse(generatedAt) : Date.now();
+    const keepLatestCompletedRuns = Math.max(1, Math.floor(input.keepLatestCompletedRuns ?? 3));
+    const completedCutoff =
+      input.maxCompletedRunAgeHours === undefined
+        ? undefined
+        : new Date(nowMs - Math.max(0, input.maxCompletedRunAgeHours) * 60 * 60 * 1000).toISOString();
+    const incompleteCutoff =
+      input.maxIncompleteRunAgeHours === undefined
+        ? undefined
+        : new Date(nowMs - Math.max(0, input.maxIncompleteRunAgeHours) * 60 * 60 * 1000).toISOString();
+
+    const before = {
+      universeRuns: this.preparedCount("universe_runs"),
+      universeMarkets: this.preparedCount("universe_markets")
+    };
+
+    const protectedCompletedRunIds = this.db.prepare(`
+      SELECT run_id
+      FROM universe_runs
+      WHERE status = 'completed'
+      ORDER BY started_at DESC, run_id DESC
+      LIMIT ?
+    `).all(keepLatestCompletedRuns)
+      .map((row) => String(rowRecord(row).run_id))
+      .filter(Boolean);
+    const protectedSet = new Set(protectedCompletedRunIds);
+
+    const runs = this.db.prepare(`
+      SELECT run_id, status, started_at
+      FROM universe_runs
+      ORDER BY started_at DESC, run_id DESC
+    `).all().map((row) => rowRecord(row));
+
+    const candidateRunIds = runs
+      .filter((run) => {
+        const runId = String(run.run_id ?? "");
+        if (!runId || protectedSet.has(runId)) {
+          return false;
+        }
+        const status = String(run.status ?? "");
+        const startedAt = String(run.started_at ?? "");
+        if (status === "completed") {
+          return completedCutoff === undefined || startedAt < completedCutoff;
+        }
+        return incompleteCutoff !== undefined && startedAt < incompleteCutoff;
+      })
+      .map((run) => String(run.run_id));
+
+    const deletedUniverseMarkets = this.countUniverseMarketsForRuns(candidateRunIds);
+    const dryRun = input.dryRun === true;
+
+    if (!dryRun && candidateRunIds.length > 0) {
+      this.db.exec("BEGIN");
+      try {
+        for (const chunk of chunkStrings(candidateRunIds, 500)) {
+          const placeholders = chunk.map(() => "?").join(", ");
+          this.db.prepare(`DELETE FROM universe_markets WHERE run_id IN (${placeholders})`).run(...chunk);
+          this.db.prepare(`DELETE FROM universe_runs WHERE run_id IN (${placeholders})`).run(...chunk);
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // Preserve the original prune failure if SQLite already aborted the transaction.
+        }
+        throw error;
+      }
+    }
+
+    const after = dryRun
+      ? before
+      : {
+          universeRuns: this.preparedCount("universe_runs"),
+          universeMarkets: this.preparedCount("universe_markets")
+        };
+
+    return {
+      generatedAt,
+      dryRun,
+      keepLatestCompletedRuns,
+      maxCompletedRunAgeHours: input.maxCompletedRunAgeHours,
+      maxIncompleteRunAgeHours: input.maxIncompleteRunAgeHours,
+      protectedCompletedRunIds,
+      candidateRunIds,
+      candidateUniverseMarkets: deletedUniverseMarkets,
+      deletedRunIds: dryRun ? [] : candidateRunIds,
+      deletedRuns: dryRun ? 0 : candidateRunIds.length,
+      deletedUniverseMarkets: dryRun ? 0 : deletedUniverseMarkets,
+      before,
+      after
+    };
+  }
+
+  private countUniverseMarketsForRuns(runIds: string[]): number {
+    let total = 0;
+    for (const chunk of chunkStrings(runIds, 500)) {
+      if (chunk.length === 0) {
+        continue;
+      }
+      const placeholders = chunk.map(() => "?").join(", ");
+      const row = rowRecord(this.db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM universe_markets
+        WHERE run_id IN (${placeholders})
+      `).get(...chunk));
+      total += Number(row.count ?? 0);
+    }
+    return total;
   }
 
   listUniverseMarkets(filters: StoredUniverseListFilters): { runId: string; total: number; markets: Array<Record<string, unknown>> } {

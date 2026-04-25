@@ -306,6 +306,102 @@ test("latest universe run ignores failed refresh attempts", async () => {
   });
 });
 
+test("universe retention prunes old scan rows while preserving latest completed run", async () => {
+  await withTempStore((store) => {
+    const makeRun = (runId: string, startedAt: string, status: "completed" | "failed" | "running") => {
+      store.startUniverseRun({
+        runId,
+        source: "gamma_events",
+        activeOnly: true,
+        closedIncluded: false,
+        status,
+        startedAt
+      });
+      if (status !== "running") {
+        store.completeUniverseRun(runId, {
+          status,
+          completedAt: startedAt,
+          totalMarkets: 1,
+          totalEvents: 1,
+          enrichedMarkets: 0
+        });
+      }
+      store.recordUniverseMarkets(runId, [
+        {
+          runId,
+          marketKey: `condition:${runId}`,
+          conditionId: runId,
+          title: `Market ${runId}`,
+          category: "test",
+          tags: [],
+          outcomes: ["Yes", "No"],
+          outcomePrices: [0.5, 0.5],
+          clobTokenIds: [`${runId}:yes`, `${runId}:no`],
+          active: true,
+          closed: false,
+          acceptingOrders: true,
+          enableOrderBook: true,
+          liquidityUsd: 1000,
+          volume24hUsd: 100,
+          spreadCents: 1,
+          categoryGroup: "test",
+          structuralType: "single-binary",
+          horizonBucket: "short-0-7d",
+          priceBucket: "balanced-30-70c",
+          liquidityBucket: "tradable",
+          spreadBucket: "normal-1-3c",
+          opportunityMode: "deep-research",
+          modelabilityScore: 50,
+          tradabilityScore: 50,
+          catalystScore: 50,
+          resolutionAmbiguityScore: 10,
+          attentionGapScore: 10,
+          crossMarketScore: 10,
+          researchPriorityScore: 50,
+          tradeOpportunityScore: 50,
+          makerScore: 50,
+          riskScore: 10,
+          reasonCodes: [],
+          disqualifiers: [],
+          rawJson: {}
+        }
+      ]);
+    };
+
+    makeRun("old-completed", "2026-04-20T00:00:00.000Z", "completed");
+    makeRun("latest-completed", "2026-04-25T00:00:00.000Z", "completed");
+    makeRun("old-failed", "2026-04-20T01:00:00.000Z", "failed");
+    makeRun("recent-running", "2026-04-25T11:00:00.000Z", "running");
+
+    const dryRun = store.pruneUniverseRuns({
+      keepLatestCompletedRuns: 1,
+      maxIncompleteRunAgeHours: 24,
+      dryRun: true,
+      now: "2026-04-25T12:00:00.000Z"
+    });
+
+    assert.deepEqual(dryRun.protectedCompletedRunIds, ["latest-completed"]);
+    assert.equal(dryRun.candidateUniverseMarkets, 2);
+    assert.deepEqual(new Set(dryRun.candidateRunIds), new Set(["old-completed", "old-failed"]));
+    assert.equal(store.getUniverseRun("old-completed")?.runId, "old-completed");
+
+    const result = store.pruneUniverseRuns({
+      keepLatestCompletedRuns: 1,
+      maxIncompleteRunAgeHours: 24,
+      now: "2026-04-25T12:00:00.000Z"
+    });
+
+    assert.equal(result.deletedRuns, 2);
+    assert.equal(result.deletedUniverseMarkets, 2);
+    assert.equal(store.getUniverseRun("old-completed"), null);
+    assert.equal(store.getUniverseRun("old-failed"), null);
+    assert.equal(store.getUniverseRun("latest-completed")?.runId, "latest-completed");
+    assert.equal(store.getUniverseRun("recent-running")?.runId, "recent-running");
+    assert.equal(store.getLatestUniverseRun()?.runId, "latest-completed");
+    assert.equal(store.getUniverseMarket("old-completed", "condition:old-completed"), null);
+  });
+});
+
 test("universe event clusters identify many-participant outsider convexity setups", async () => {
   await withTempStore((store) => {
     const runId = store.startUniverseRun({

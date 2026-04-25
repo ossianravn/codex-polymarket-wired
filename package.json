@@ -21,6 +21,7 @@
     "dev:executor": "tsx ./services/executor-daemon/src/index.ts",
     "executor:once": "tsx ./services/executor-daemon/src/index.ts --once",
     "state:summary": "tsx ./scripts/state-summary.ts",
+    "state:maintenance": "tsx ./scripts/state-maintenance.ts",
     "state:queue": "tsx ./scripts/execution-queue.ts",
     "autotrader:heartbeat": "node ./scripts/autotrader-heartbeat.mjs",
     "autotrader:automation": "node ./scripts/autotrader-automation.mjs",
