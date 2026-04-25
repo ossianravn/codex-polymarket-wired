@@ -3,7 +3,7 @@ import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-type AgentProvider = "dry_hold" | "openai";
+type AgentProvider = "codex_cli" | "dry_hold" | "openai";
 
 export interface PaperAgentOnceOptions {
   sessionId?: string;
@@ -116,7 +116,7 @@ export function parsePaperAgentOnceArgs(argv = process.argv.slice(2)): PaperAgen
     }
   }
 
-  if (options.provider !== "dry_hold" && options.provider !== "openai") {
+  if (options.provider !== "codex_cli" && options.provider !== "dry_hold" && options.provider !== "openai") {
     throw new Error(`Unsupported AUTOTRADER_AGENT_PROVIDER: ${options.provider}`);
   }
   return options;

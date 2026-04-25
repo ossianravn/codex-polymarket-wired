@@ -196,3 +196,55 @@ test("agent command parses mocked OpenAI Responses structured output", async () 
     }
   });
 });
+
+test("agent command can use Codex CLI provider through schema output file", async () => {
+  await withTempDir(async (dir) => {
+    const cwd = process.cwd();
+    const briefPath = path.join(dir, "brief.json");
+    const promptPath = path.join(dir, "prompt.md");
+    const fakeCodexPath = path.join(dir, "fake-codex.mjs");
+    await writeFile(briefPath, `${JSON.stringify(briefFixture(), null, 2)}\n`, "utf8");
+    await writeFile(promptPath, "Return a decision plan.", "utf8");
+    await writeFile(fakeCodexPath, `
+import { writeFileSync } from "node:fs";
+
+const outputIndex = process.argv.indexOf("--output-last-message");
+if (outputIndex < 0) {
+  console.error("missing --output-last-message");
+  process.exit(2);
+}
+if (!process.argv.includes("exec")) {
+  console.error("missing exec subcommand");
+  process.exit(3);
+}
+writeFileSync(process.argv[outputIndex + 1], JSON.stringify({
+  kind: "polymarket_autotrader_agent_decision_plan_v1",
+  sessionId: "agent-command-session",
+  agentName: "fake-codex-cli-agent",
+  decisions: [{
+    decisionRef: "candidate-01",
+    action: "paper_buy_yes",
+    confidence: 0.61,
+    rationale: "Fake Codex CLI selected a bounded paper buy.",
+    limitPrice: 0.4,
+    maxSpendUsdc: 5
+  }]
+}) + "\\n");
+`, "utf8");
+
+    const child = runAgentCommand([
+      "--provider=codex_cli",
+      `--brief=${briefPath}`,
+      `--prompt=${promptPath}`
+    ], {
+      AUTOTRADER_CODEX_BIN: process.execPath,
+      AUTOTRADER_CODEX_PREFIX_ARGS: JSON.stringify([fakeCodexPath])
+    }, cwd);
+
+    assert.equal(child.status, 0, String(child.stderr));
+    const plan = JSON.parse(String(child.stdout)) as Record<string, unknown>;
+    assert.equal(plan.sessionId, "agent-command-session");
+    assert.equal(plan.agentName, "fake-codex-cli-agent");
+    assert.equal((plan.decisions as Array<Record<string, unknown>>)[0]?.action, "paper_buy_yes");
+  });
+});

@@ -69,6 +69,23 @@ test("paper agent once supports OpenAI provider command configuration", () => {
   assert.ok(args.includes("--agent-candidate-limit=8"));
 });
 
+test("paper agent once supports Codex CLI provider command configuration", () => {
+  const options = parsePaperAgentOnceArgs([
+    "--session-id=session-codex",
+    "--provider=codex_cli",
+    "--model=gpt-5.2"
+  ]);
+
+  assert.equal(options.provider, "codex_cli");
+  const command = buildAgentCommand(options);
+  assert.match(command, /--provider=codex_cli/);
+  assert.match(command, /--model=gpt-5\.2/);
+
+  const env = buildDaemonEnv(options);
+  assert.equal(env.AUTOTRADER_AGENT_PROVIDER, "codex_cli");
+  assert.equal(env.POLYMARKET_ENABLE_TRADING, "false");
+});
+
 test("paper agent once requires an explicit session id", () => {
   const original = process.env.AUTOTRADER_SESSION_ID;
   delete process.env.AUTOTRADER_SESSION_ID;
