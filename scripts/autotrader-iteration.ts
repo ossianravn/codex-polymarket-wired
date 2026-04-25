@@ -1,13 +1,16 @@
 import process from "node:process";
+import { readFile } from "node:fs/promises";
 
 import {
   compactAutoTradingIterationResult,
   evaluateUniverseFreshness,
   normalizeAutoTradingMandate,
+  runResearchEvidencePipeline,
   runIndependentForecastWriter,
   runAutoTradingIteration,
   type AutoTradingMandateInput,
-  type AutoTradingRiskProfile
+  type AutoTradingRiskProfile,
+  type ResearchSourcePack
 } from "../packages/auto-trader/src/index.js";
 import { loadRuntimeConfig } from "../packages/polymarket-core/src/index.js";
 import { openStateStore } from "../packages/state-store/src/index.js";
@@ -21,6 +24,7 @@ interface CliOptions {
   mode?: "paper" | "live_guarded" | "live_autonomous";
   limit: number;
   autoForecast: boolean;
+  researchSourceFile?: string;
   maxUniverseAgeMinutes: number;
   allowStaleUniverse: boolean;
   json: boolean;
@@ -48,6 +52,7 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
   const options: CliOptions = {
     limit: 25,
     autoForecast: true,
+    researchSourceFile: process.env.AUTOTRADER_RESEARCH_SOURCE_FILE,
     maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
     allowStaleUniverse: envBoolean("AUTOTRADER_ALLOW_STALE_UNIVERSE", false),
     json: false,
@@ -93,6 +98,11 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
       options.limit = Number(arg.split("=")[1]);
     } else if (arg === "--no-auto-forecast") {
       options.autoForecast = false;
+    } else if (arg === "--research-source-file") {
+      options.researchSourceFile = next;
+      index += 1;
+    } else if (arg.startsWith("--research-source-file=")) {
+      options.researchSourceFile = arg.split("=")[1];
     } else if (arg === "--max-universe-age-minutes") {
       options.maxUniverseAgeMinutes = Number(next);
       index += 1;
@@ -110,6 +120,23 @@ function parseCliArgs(argv = process.argv.slice(2)): CliOptions {
   }
   options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes)));
   return options;
+}
+
+async function loadResearchSourcePacks(filePath: string | undefined): Promise<ResearchSourcePack[] | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  const parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+  if (Array.isArray(parsed)) {
+    return parsed as ResearchSourcePack[];
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { sourcePacks?: unknown }).sourcePacks)) {
+    return (parsed as { sourcePacks: ResearchSourcePack[] }).sourcePacks;
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray((parsed as { packs?: unknown }).packs)) {
+    return (parsed as { packs: ResearchSourcePack[] }).packs;
+  }
+  throw new Error("Research source file must be an array or an object with sourcePacks array.");
 }
 
 function renderSummary(result: Awaited<ReturnType<typeof runAutoTradingIteration>>): string {
@@ -140,6 +167,7 @@ async function main(): Promise<void> {
   }
   const config = loadRuntimeConfig();
   const store = openStateStore(config.stateDbPath);
+  const sourcePacks = await loadResearchSourcePacks(options.researchSourceFile);
   const universeFreshness = evaluateUniverseFreshness(
     store.getLatestUniverseRun(),
     { maxAgeMinutes: options.maxUniverseAgeMinutes }
@@ -179,6 +207,14 @@ async function main(): Promise<void> {
       mode: options.mode ?? "paper"
     };
   const mandate = normalizeAutoTradingMandate(mandateInput);
+  const researchPipeline = sourcePacks && sourcePacks.length > 0
+    ? runResearchEvidencePipeline(store, {
+      sessionId: options.sessionId,
+      limit: options.limit,
+      sourcePacks,
+      automationName: "autotrader-iteration"
+    })
+    : undefined;
   const forecastWriter = options.autoForecast
     ? runIndependentForecastWriter(store, {
       limit: Math.max(options.limit * 80, 1_000),
@@ -199,6 +235,7 @@ async function main(): Promise<void> {
     summary: `auto-trader proposed ${result.summary.proposedOrders} paper orders; next run ${result.summary.nextRunAt ?? "unknown"}`,
     output: {
       universeFreshness,
+      researchPipeline,
       forecastWriter,
       iteration: result
     } as unknown as Record<string, unknown>
@@ -207,6 +244,7 @@ async function main(): Promise<void> {
   if (options.json) {
     const output = {
       universeFreshness,
+      researchPipeline,
       forecastWriter,
       ...(options.compact ? compactAutoTradingIterationResult(result) : result)
     };

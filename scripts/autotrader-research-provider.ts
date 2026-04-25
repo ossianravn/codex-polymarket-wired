@@ -5,7 +5,7 @@ import {
   buildResearchEvidenceBundles,
   buildResearchEvidenceTemplate,
   runIndependentForecastWriter,
-  runResearchRequestWorker,
+  runResearchEvidencePipeline,
   type ResearchEvidenceTemplateResult,
   type ResearchRequestEvidenceTemplate,
   type ResearchSourcePack
@@ -91,7 +91,7 @@ function templatesFromJson(parsed: unknown): ResearchEvidenceTemplateResult | Re
 
 function renderText(result: {
   provider: ReturnType<typeof buildResearchEvidenceBundles>;
-  research?: ReturnType<typeof runResearchRequestWorker>;
+  research?: NonNullable<ReturnType<typeof runResearchEvidencePipeline>["worker"]>;
   forecasts?: ReturnType<typeof runIndependentForecastWriter>;
 }): string {
   const lines = [
@@ -136,7 +136,16 @@ async function main(): Promise<void> {
         sessionId: options.sessionId,
         limit: options.limit
       });
-    const provider = buildResearchEvidenceBundles({
+    const pipeline = options.record
+      ? runResearchEvidencePipeline(store, {
+        templates,
+        sessionId: options.sessionId,
+        limit: options.limit,
+        sourcePacks,
+        automationName: "autotrader-research-provider"
+      })
+      : undefined;
+    const provider = pipeline?.provider ?? buildResearchEvidenceBundles({
       templates,
       sourcePacks,
       automationName: "autotrader-research-provider"
@@ -144,13 +153,7 @@ async function main(): Promise<void> {
     if (options.outFile) {
       await writeFile(options.outFile, `${JSON.stringify({ evidenceBundles: provider.evidenceBundles }, null, 2)}\n`, "utf8");
     }
-    const research = options.record
-      ? runResearchRequestWorker(store, {
-        sessionId: options.sessionId,
-        limit: options.limit,
-        evidenceBundles: provider.evidenceBundles
-      })
-      : undefined;
+    const research = pipeline?.worker;
     const forecasts = options.writeForecasts
       ? runIndependentForecastWriter(store, {
         runId: options.forecastRunId,

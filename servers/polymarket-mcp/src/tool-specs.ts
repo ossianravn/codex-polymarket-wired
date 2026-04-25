@@ -330,6 +330,12 @@ export const TOOLS: ToolSpec[] = [
           default: true,
           description: "Write sealed screening independentForecast artifacts for eligible universe markets before planning."
         },
+        research_source_packs: {
+          type: "array",
+          maxItems: 50,
+          items: { type: "object", additionalProperties: true },
+          description: "Optional externally researched source packs. When supplied, the tool validates them against pending research templates, records accepted research runs, then lets auto_forecast upgrade eligible markets to deep_research_forecast_v1."
+        },
         compact: { type: "boolean", default: true, description: "Return compact agent-facing decisions without raw market payloads." }
       },
       required: ["session_id"]

@@ -1,8 +1,14 @@
+import type { StateStore } from "../../state-store/src/index.js";
 import type {
   ResearchEvidenceBundle,
   ResearchEvidenceItem,
   ResearchEvidenceTemplateResult,
-  ResearchRequestEvidenceTemplate
+  ResearchRequestEvidenceTemplate,
+  ResearchRequestWorkerResult
+} from "./research-request-worker.js";
+import {
+  buildResearchEvidenceTemplate,
+  runResearchRequestWorker
 } from "./research-request-worker.js";
 
 export interface ResearchSourceEvidenceItem {
@@ -65,6 +71,22 @@ export interface ResearchEvidenceProviderResult {
   skippedInvalid: number;
   evidenceBundles: ResearchEvidenceBundle[];
   issues: ResearchEvidenceProviderIssue[];
+}
+
+export interface ResearchEvidencePipelineInput {
+  sessionId?: string;
+  limit?: number;
+  now?: Date;
+  sourcePacks?: ResearchSourcePack[];
+  templates?: ResearchEvidenceTemplateResult | ResearchRequestEvidenceTemplate[];
+  requireTemplate?: boolean;
+  markDecisionPayload?: boolean;
+  automationName?: string;
+}
+
+export interface ResearchEvidencePipelineResult {
+  provider?: ResearchEvidenceProviderResult;
+  worker?: ResearchRequestWorkerResult;
 }
 
 function templatesArray(
@@ -312,4 +334,33 @@ export function buildResearchEvidenceBundles(
   }
 
   return result;
+}
+
+export function runResearchEvidencePipeline(
+  store: StateStore,
+  input: ResearchEvidencePipelineInput = {}
+): ResearchEvidencePipelineResult {
+  if (!input.sourcePacks || input.sourcePacks.length === 0) {
+    return {};
+  }
+  const templates = input.templates ?? buildResearchEvidenceTemplate(store, {
+    sessionId: input.sessionId,
+    limit: input.limit,
+    now: input.now
+  });
+  const provider = buildResearchEvidenceBundles({
+    templates,
+    sourcePacks: input.sourcePacks,
+    now: input.now,
+    requireTemplate: input.requireTemplate,
+    automationName: input.automationName
+  });
+  const worker = runResearchRequestWorker(store, {
+    sessionId: input.sessionId,
+    limit: input.limit,
+    now: input.now,
+    evidenceBundles: provider.evidenceBundles,
+    markDecisionPayload: input.markDecisionPayload
+  });
+  return { provider, worker };
 }

@@ -8,6 +8,7 @@ import {
   buildResearchEvidenceBundles,
   buildResearchEvidenceTemplate,
   runIndependentForecastWriter,
+  runResearchEvidencePipeline,
   runResearchRequestWorker,
   type AutoTradingResearchRequest,
   type ResearchSourcePack
@@ -222,6 +223,57 @@ test("research evidence provider builds bundles and unlocks deep research foreca
     const forecast = (market?.rawJson as Record<string, unknown>).independentForecast as Record<string, unknown>;
     assert.equal(forecast.method, "deep_research_forecast_v1");
     assert.equal((forecast.evidence as Record<string, unknown>).confidenceTier, "researched");
+  });
+});
+
+test("research evidence pipeline records bundles for pending session templates", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const session = store.createAutoTradingSession({
+      sessionId: "research-pipeline-session",
+      status: "active",
+      mode: "paper",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+    store.recordAutoTradingDecision({
+      sessionId: session.sessionId,
+      iterationId: "iteration-1",
+      marketKey: "condition:provider",
+      title: "Provider market",
+      action: "research_required",
+      status: "research",
+      score: 91,
+      reasonCodes: ["forecast_gate:screening_only"],
+      blockers: ["independent_forecast_screening_only"],
+      payload: {
+        researchRequest: fixtureResearchRequest(now)
+      }
+    });
+
+    const pipeline = runResearchEvidencePipeline(store, {
+      sessionId: session.sessionId,
+      limit: 10,
+      now,
+      sourcePacks: [validSourcePack(now)]
+    });
+
+    assert.equal(pipeline.provider?.writtenBundles, 1);
+    assert.equal(pipeline.worker?.recordedResearchRuns, 1);
+    const templateAfterRecord = buildResearchEvidenceTemplate(store, {
+      sessionId: session.sessionId,
+      now,
+      limit: 10
+    });
+    assert.equal(templateAfterRecord.pendingRequests, 0);
+    assert.equal(templateAfterRecord.skippedAlreadyCompleted, 1);
   });
 });
 

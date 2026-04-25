@@ -64,6 +64,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     previewLimit: envNumber("AUTOTRADER_PREVIEW_LIMIT", 1),
     respectNextRunAt: envBoolean("AUTOTRADER_RESPECT_NEXT_RUN_AT", true),
     schedulerSlackSeconds: envNumber("AUTOTRADER_SCHEDULER_SLACK_SECONDS", 30),
+    researchSourceFile: envString("AUTOTRADER_RESEARCH_SOURCE_FILE", undefined),
     observationLogPath: envString("AUTOTRADER_OBSERVATION_LOG_PATH", "state/autotrader-heartbeat.jsonl"),
     latestReportPath: envString("AUTOTRADER_LATEST_REPORT_PATH", "state/autotrader-heartbeat-latest.json")
   };
@@ -183,6 +184,11 @@ function parseArgs(argv = process.argv.slice(2)) {
       index += 1;
     } else if (arg.startsWith("--scheduler-slack-seconds=")) {
       options.schedulerSlackSeconds = Number(arg.split("=")[1]);
+    } else if (arg === "--research-source-file") {
+      options.researchSourceFile = next;
+      index += 1;
+    } else if (arg.startsWith("--research-source-file=")) {
+      options.researchSourceFile = arg.split("=")[1];
     } else if (arg === "--observation-log") {
       options.observationLogPath = next;
       index += 1;
@@ -458,6 +464,19 @@ async function readJsonIfExists(filePath) {
   }
 }
 
+function sourcePacksFromJson(parsed) {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.sourcePacks)) {
+    return parsed.sourcePacks;
+  }
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.packs)) {
+    return parsed.packs;
+  }
+  throw new Error("Research source file must be an array or an object with sourcePacks array.");
+}
+
 function compactObservation(report) {
   const iterationSummary = report.iteration?.summary;
   const paperBuyProposals = report.iteration?.paperBuyProposals ?? [];
@@ -489,6 +508,8 @@ function compactObservation(report) {
     proposedBudgetUsdc: iterationSummary?.proposedBudgetUsdc,
     remainingBudgetUsdc: iterationSummary?.remainingBudgetUsdc,
     eligibleMarkets: iterationSummary?.eligibleMarkets,
+    researchBundlesReady: report.iteration?.researchPipeline?.provider?.writtenBundles,
+    researchRunsRecorded: report.iteration?.researchPipeline?.worker?.recordedResearchRuns,
     proposedOrders: iterationSummary?.proposedOrders,
     exitOrders: iterationSummary?.exitOrders,
     researchRequired: iterationSummary?.researchRequired,
@@ -700,7 +721,8 @@ async function main() {
       budgetUsdc: options.budgetUsdc,
       timeframeHours: options.timeframeHours,
       executorLimit: options.executorLimit,
-      previewLimit: options.previewLimit
+      previewLimit: options.previewLimit,
+      researchSourceFile: options.researchSourceFile ? absolutePath(options.researchSourceFile) : undefined
     },
     toolInventory: null,
     universe: null,
@@ -811,11 +833,15 @@ async function main() {
     }
 
     const session = await findOrCreateSession(client, options, report);
+    const researchSourcePacks = options.researchSourceFile
+      ? sourcePacksFromJson(await readJsonIfExists(absolutePath(options.researchSourceFile)))
+      : undefined;
     const iteration = session.iterationOutput
       ? { elapsedMs: 0, output: session.iterationOutput }
       : await callTool(client, "run_auto_trading_iteration", {
         session_id: session.sessionId,
         limit: options.limit,
+        research_source_packs: researchSourcePacks,
         compact: true
       });
     const decisions = Array.isArray(iteration.output?.candidates) ? iteration.output.candidates : [];
@@ -825,6 +851,7 @@ async function main() {
       sessionId: session.sessionId,
       startedThisRun: session.started,
       actionCounts: countActions(decisions),
+      researchPipeline: iteration.output?.researchPipeline,
       summary,
       proposedOrders: summary?.proposedOrders,
       exitOrders: summary?.exitOrders,

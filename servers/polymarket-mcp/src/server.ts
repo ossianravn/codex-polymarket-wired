@@ -73,9 +73,11 @@ import {
   compactAutoTradingIterationResult,
   normalizeAutoTradingMandate,
   runIndependentForecastWriter,
+  runResearchEvidencePipeline,
   runAutoTradingIteration,
   type AutoTradingMandateInput,
-  type AutoTradingRiskProfile
+  type AutoTradingRiskProfile,
+  type ResearchSourcePack
 } from "../../../packages/auto-trader/src/index.js";
 import {
   LIVE_AUTONOMOUS_SUBMIT_CONFIRMATION,
@@ -1788,6 +1790,7 @@ server.registerTool(
       session_id: z.string().min(1),
       limit: z.number().int().min(1).max(100).default(25),
       auto_forecast: z.boolean().default(true),
+      research_source_packs: z.array(z.record(z.string(), z.unknown())).max(50).optional(),
       compact: z.boolean().default(true)
     }
   },
@@ -1797,6 +1800,15 @@ server.registerTool(
     const existingSession = store.getAutoTradingSession(input.session_id);
     const mandate = existingSession
       ? normalizeAutoTradingMandate(existingSession.mandate as unknown as AutoTradingMandateInput)
+      : undefined;
+    const sourcePacks = input.research_source_packs as unknown as ResearchSourcePack[] | undefined;
+    const researchPipeline = sourcePacks && sourcePacks.length > 0
+      ? runResearchEvidencePipeline(store, {
+        sessionId: input.session_id,
+        limit: input.limit,
+        sourcePacks,
+        automationName: "mcp-run-auto-trading-iteration"
+      })
       : undefined;
     const forecastWriter = input.auto_forecast
       ? runIndependentForecastWriter(store, {
@@ -1816,12 +1828,14 @@ server.registerTool(
       findingsCount: result.candidates.length,
       summary: `auto-trading session ${result.session.sessionId}; proposed ${result.summary.proposedOrders} paper orders`,
       output: {
+        researchPipeline,
         forecastWriter,
         iteration: compactAutoTradingIterationResult(result)
       } as unknown as Record<string, unknown>
     });
     const response = input.compact ? compactAutoTradingIterationResult(result) : result;
     return textResult({
+      researchPipeline,
       forecastWriter,
       ...response
     } as unknown as Record<string, unknown>);

@@ -16,6 +16,9 @@ export {
 } from "./forecast-writer.js";
 export {
   buildResearchEvidenceBundles,
+  runResearchEvidencePipeline,
+  type ResearchEvidencePipelineInput,
+  type ResearchEvidencePipelineResult,
   type ResearchEvidenceProviderInput,
   type ResearchEvidenceProviderIssue,
   type ResearchEvidenceProviderResult,
