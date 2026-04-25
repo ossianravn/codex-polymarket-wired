@@ -1,5 +1,7 @@
 import type { StateStore } from "../../state-store/src/index.js";
 
+export type IndependentForecastMethod = "screening_forecast_v0" | "deep_research_forecast_v1";
+
 export interface IndependentForecastArtifact {
   sealed: true;
   probability: number;
@@ -8,18 +10,29 @@ export interface IndependentForecastArtifact {
   expiresAt: string;
   numericalChecks: string[];
   usesVenuePrice: false;
-  method: "screening_forecast_v0";
+  method: IndependentForecastMethod;
   evidence: {
     baseRate: number;
-    structuralAdjustment: number;
-    catalystAdjustment: number;
-    modelabilityAdjustment: number;
-    ambiguityAdjustment: number;
-    riskAdjustment: number;
+    structuralAdjustment?: number;
+    catalystAdjustment?: number;
+    modelabilityAdjustment?: number;
+    ambiguityAdjustment?: number;
+    riskAdjustment?: number;
     exclusiveGroupSize?: number;
     baseRateReason: string;
     probabilityCap?: number;
-    confidenceTier: "screening-low" | "screening-medium";
+    confidenceTier: "screening-low" | "screening-medium" | "researched";
+    researchRunId?: string;
+    researchCompletedAt?: string;
+    evidenceItemCount?: number;
+    supportsYesCount?: number;
+    supportsNoCount?: number;
+    openQuestionCount?: number;
+    fairValueLow?: number;
+    fairValueBase?: number;
+    fairValueHigh?: number;
+    providers?: string[];
+    contaminationGuard?: string;
     sourceFields: string[];
     evidenceNotes: string[];
   };
@@ -45,6 +58,7 @@ export interface ForecastWriterResult {
   forecasts: Array<{
     marketKey: string;
     title?: string;
+    method: IndependentForecastMethod;
     probability: number;
     uncertainty: number;
     expiresAt: string;
@@ -106,6 +120,10 @@ function asNumber(value: unknown): number | undefined {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -270,6 +288,10 @@ function hasExistingForecast(market: Record<string, unknown>): boolean {
   return Boolean(asRecord(asRecord(market.rawJson)?.independentForecast));
 }
 
+function existingForecast(market: Record<string, unknown>): Record<string, unknown> | undefined {
+  return asRecord(asRecord(market.rawJson)?.independentForecast);
+}
+
 function marketEligibleForForecast(market: Record<string, unknown>, now: Date): boolean {
   if (market.active === false || market.closed === true || market.acceptingOrders === false) {
     return false;
@@ -279,6 +301,204 @@ function marketEligibleForForecast(market: Record<string, unknown>, now: Date): 
   }
   const endDate = typeof market.endDate === "string" ? Date.parse(market.endDate) : Number.NaN;
   return Number.isFinite(endDate) && endDate > now.getTime() - 60 * 1000;
+}
+
+function normalizeProbability(value: unknown): number | undefined {
+  const numeric = asNumber(value);
+  if (numeric === undefined) {
+    return undefined;
+  }
+  const probability = numeric > 1 ? numeric / 100 : numeric;
+  return probability > 0 && probability < 1 ? Number(probability.toFixed(4)) : undefined;
+}
+
+function evidenceStance(item: Record<string, unknown>): "yes" | "no" | "neutral" {
+  const stance = String(item.stance ?? item.impact ?? "").toLowerCase();
+  if (["supports_no", "no", "oppose", "bearish", "negative", "counter"].some((token) => stance.includes(token))) {
+    return "no";
+  }
+  if (["supports_yes", "yes", "support", "bullish", "positive"].some((token) => stance.includes(token))) {
+    return "yes";
+  }
+  return "neutral";
+}
+
+function evidenceItems(researchRun: Record<string, unknown>): Array<Record<string, unknown>> {
+  const evidence = researchRun.evidence;
+  return Array.isArray(evidence)
+    ? evidence.filter((item): item is Record<string, unknown> => Boolean(asRecord(item)))
+    : [];
+}
+
+function researchHasVenuePriceContamination(researchRun: Record<string, unknown>): boolean {
+  const synthesis = asRecord(researchRun.synthesis) ?? {};
+  if (
+    booleanFlag(synthesis.usesVenuePrice) === true ||
+    booleanFlag(synthesis.usesMarketPrice) === true ||
+    booleanFlag(synthesis.priceContaminated) === true ||
+    booleanFlag(researchRun.usesVenuePrice) === true ||
+    booleanFlag(researchRun.usesMarketPrice) === true ||
+    booleanFlag(researchRun.priceContaminated) === true
+  ) {
+    return true;
+  }
+
+  const text = [
+    researchRun.notes,
+    researchRun.thesis,
+    researchRun.question,
+    ...asStringArray(researchRun.providers),
+    ...evidenceItems(researchRun).flatMap((item) => [item.source, item.title, item.summary])
+  ].map((value) => String(value ?? "").toLowerCase()).join("\n");
+
+  return [
+    "venue price",
+    "venue market price",
+    "exchange market price",
+    "market-implied",
+    "market implied",
+    "polymarket odds",
+    "polymarket price",
+    "orderbook",
+    "order book",
+    "best bid",
+    "best ask",
+    "midpoint"
+  ].some((token) => text.includes(token));
+}
+
+function validResearchForecastInput(researchRun: Record<string, unknown>): {
+  fairValueLow: number;
+  fairValueBase: number;
+  fairValueHigh: number;
+  supportsYes: number;
+  supportsNo: number;
+  evidenceCount: number;
+  openQuestionCount: number;
+} | undefined {
+  if (researchHasVenuePriceContamination(researchRun)) {
+    return undefined;
+  }
+  const fairValueBase = normalizeProbability(researchRun.fair_value_base ?? researchRun.fairValueBase);
+  if (fairValueBase === undefined) {
+    return undefined;
+  }
+  const fairValueLow = normalizeProbability(researchRun.fair_value_low ?? researchRun.fairValueLow) ?? fairValueBase;
+  const fairValueHigh = normalizeProbability(researchRun.fair_value_high ?? researchRun.fairValueHigh) ?? fairValueBase;
+  if (fairValueLow > fairValueBase || fairValueHigh < fairValueBase || fairValueLow > fairValueHigh) {
+    return undefined;
+  }
+
+  const items = evidenceItems(researchRun);
+  const supportsYes = items.filter((item) => evidenceStance(item) === "yes").length;
+  const supportsNo = items.filter((item) => evidenceStance(item) === "no").length;
+  if (items.length < 2 || supportsNo < 1) {
+    return undefined;
+  }
+
+  return {
+    fairValueLow,
+    fairValueBase,
+    fairValueHigh,
+    supportsYes,
+    supportsNo,
+    evidenceCount: items.length,
+    openQuestionCount: asStringArray(researchRun.openQuestions ?? researchRun.open_questions).length
+  };
+}
+
+function latestValidResearchRun(
+  store: StateStore,
+  market: Record<string, unknown>
+): { researchRun: Record<string, unknown>; input: NonNullable<ReturnType<typeof validResearchForecastInput>> } | undefined {
+  const marketKey = optionalString(market.marketKey);
+  if (!marketKey) {
+    return undefined;
+  }
+  let researchRuns: Array<Record<string, unknown>>;
+  try {
+    researchRuns = store.getMarketState({ marketKey, limit: 10 }).researchRuns;
+  } catch {
+    return undefined;
+  }
+  for (const researchRun of researchRuns) {
+    const input = validResearchForecastInput(researchRun);
+    if (input) {
+      return { researchRun, input };
+    }
+  }
+  return undefined;
+}
+
+function buildDeepResearchForecastArtifact(
+  market: Record<string, unknown>,
+  researchRun: Record<string, unknown>,
+  input: NonNullable<ReturnType<typeof validResearchForecastInput>>,
+  now = new Date()
+): IndependentForecastArtifact {
+  const intervalWidth = Math.max(0, input.fairValueHigh - input.fairValueLow);
+  const uncertainty = clampUncertainty(Math.max(
+    0.035,
+    intervalWidth / 2,
+    0.025 + input.openQuestionCount * 0.01 + Math.max(0, 3 - input.evidenceCount) * 0.015
+  ));
+  const evidence = evidenceItems(researchRun);
+  const counterCase = evidence
+    .filter((item) => evidenceStance(item) === "no")
+    .map((item) => optionalString(item.summary) ?? optionalString(item.title))
+    .filter((value): value is string => Boolean(value))
+    .at(0) ?? "Research artifact includes counter-evidence but no single summary was selected.";
+  const researchCompletedAt = optionalString(researchRun.completed_at ?? researchRun.completedAt);
+
+  return {
+    sealed: true,
+    probability: input.fairValueBase,
+    uncertainty,
+    forecastedAt: now.toISOString(),
+    expiresAt: forecastExpiry(market, now),
+    numericalChecks: [
+      `research_run_id:${researchRun.run_id ?? researchRun.runId ?? "unknown"}`,
+      `fair_value_low:${input.fairValueLow}`,
+      `fair_value_base:${input.fairValueBase}`,
+      `fair_value_high:${input.fairValueHigh}`,
+      `uncertainty:${uncertainty}`,
+      `evidence_item_count:${input.evidenceCount}`,
+      `counter_evidence_count:${input.supportsNo}`,
+      `open_question_count:${input.openQuestionCount}`
+    ],
+    usesVenuePrice: false,
+    method: "deep_research_forecast_v1",
+    evidence: {
+      baseRate: input.fairValueBase,
+      baseRateReason: "stored_research_fair_value",
+      confidenceTier: "researched",
+      researchRunId: optionalString(researchRun.run_id ?? researchRun.runId),
+      researchCompletedAt,
+      evidenceItemCount: input.evidenceCount,
+      supportsYesCount: input.supportsYes,
+      supportsNoCount: input.supportsNo,
+      openQuestionCount: input.openQuestionCount,
+      fairValueLow: input.fairValueLow,
+      fairValueBase: input.fairValueBase,
+      fairValueHigh: input.fairValueHigh,
+      providers: asStringArray(researchRun.providers),
+      contaminationGuard: "passed_no_venue_price_terms_or_flags",
+      sourceFields: [
+        "research_runs.fair_value_low",
+        "research_runs.fair_value_base",
+        "research_runs.fair_value_high",
+        "research_runs.open_questions_json",
+        "evidence_items"
+      ],
+      evidenceNotes: [
+        "stored_research_run_present",
+        `supports_yes:${input.supportsYes}`,
+        `supports_no:${input.supportsNo}`,
+        ...(researchCompletedAt ? [`research_completed_at:${researchCompletedAt}`] : [])
+      ]
+    },
+    counterCase
+  };
 }
 
 export function buildIndependentForecastArtifact(
@@ -397,12 +617,27 @@ export function runIndependentForecastWriter(
       result.skippedIneligible += 1;
       continue;
     }
-    if (!input.overwrite && hasExistingForecast(market)) {
+
+    const research = latestValidResearchRun(store, market);
+    const artifact = research
+      ? buildDeepResearchForecastArtifact(market, research.researchRun, research.input, now)
+      : buildIndependentForecastArtifact(market, now);
+    const existing = existingForecast(market);
+    const existingResearchRunId = optionalString(asRecord(existing?.evidence)?.researchRunId);
+    const nextResearchRunId = optionalString(artifact.evidence.researchRunId);
+    const canUpgradeScreening =
+      artifact.method === "deep_research_forecast_v1" &&
+      existing?.method === "screening_forecast_v0";
+    const canReplaceOlderResearch =
+      artifact.method === "deep_research_forecast_v1" &&
+      existing?.method === "deep_research_forecast_v1" &&
+      nextResearchRunId !== undefined &&
+      nextResearchRunId !== existingResearchRunId;
+    if (!input.overwrite && hasExistingForecast(market) && !canUpgradeScreening && !canReplaceOlderResearch) {
       result.skippedExisting += 1;
       continue;
     }
 
-    const artifact = buildIndependentForecastArtifact(market, now);
     const rawJson = {
       ...(asRecord(market.rawJson) ?? {}),
       independentForecast: artifact
@@ -412,6 +647,7 @@ export function runIndependentForecastWriter(
     result.forecasts.push({
       marketKey,
       title: typeof market.title === "string" ? market.title : undefined,
+      method: artifact.method,
       probability: artifact.probability,
       uncertainty: artifact.uncertainty,
       expiresAt: artifact.expiresAt

@@ -366,6 +366,224 @@ test("auto-trader treats legacy screening forecasts on exclusive fields as resea
   });
 });
 
+test("forecast writer upgrades screening forecasts from sealed research evidence", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:researched-edge",
+      conditionId: "researched-edge",
+      slug: "researched-edge",
+      title: "Will researched candidate win?",
+      tags: ["test"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.08, 0.92],
+      clobTokenIds: ["yes", "no"],
+      yesTokenId: "yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 25_000,
+      impliedProb: 0.08,
+      bestBid: 0.08,
+      bestAsk: 0.081,
+      midpoint: 0.0805,
+      spreadCents: 0.1,
+      negRisk: true,
+      structuralType: "single-binary",
+      categoryGroup: "politics",
+      modelabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 10,
+      riskScore: 5,
+      researchPriorityScore: 95,
+      tradeOpportunityScore: 98,
+      tradabilityScore: 95,
+      reasonCodes: ["clear_resolution_text", "neg_risk_cluster"],
+      disqualifiers: [],
+      rawJson: {
+        independentForecast: {
+          sealed: true,
+          probability: 0.09,
+          uncertainty: 0.1,
+          forecastedAt: now.toISOString(),
+          expiresAt: isoAfter(now, 6),
+          numericalChecks: ["legacy_screening_fixture"],
+          usesVenuePrice: false,
+          method: "screening_forecast_v0"
+        },
+        rawGammaEvent: {
+          negRisk: true,
+          enableNegRisk: true,
+          markets: Array.from({ length: 20 }, (_, index) => ({
+            id: `candidate-${index}`,
+            active: true,
+            closed: false
+          }))
+        }
+      }
+    }]);
+    const researchRunId = store.recordResearchRun({
+      marketKey: "condition:researched-edge",
+      title: "Researched edge fixture",
+      question: "Will researched candidate win?",
+      thesis: "Independent evidence indicates the candidate is underpriced versus the base field prior.",
+      fairValueLow: 0.17,
+      fairValueBase: 0.22,
+      fairValueHigh: 0.27,
+      supportsYes: [
+        {
+          source: "official-polling-source",
+          title: "Candidate over-performs recent baseline",
+          summary: "Recent non-venue evidence shows stronger support than the prior field estimate.",
+          stance: "supports_yes",
+          confidence: "0.7"
+        }
+      ],
+      supportsNo: [
+        {
+          source: "official-election-calendar",
+          title: "Large remaining field",
+          summary: "A large candidate field remains a material counter-case against outright victory.",
+          stance: "supports_no",
+          confidence: "0.65"
+        }
+      ],
+      openQuestions: ["Whether the over-performance persists after the next debate."],
+      providers: ["official-polling-source", "official-election-calendar"],
+      completedAt: now.toISOString()
+    });
+
+    const writerResult = runIndependentForecastWriter(store, { runId, now, limit: 10 });
+    assert.equal(writerResult.written, 1);
+    assert.equal(writerResult.forecasts[0]?.method, "deep_research_forecast_v1");
+
+    const market = store.getUniverseMarket(runId, "condition:researched-edge");
+    const forecast = (market?.rawJson as Record<string, unknown>).independentForecast as Record<string, unknown>;
+    const evidence = forecast.evidence as Record<string, unknown>;
+    assert.equal(forecast.method, "deep_research_forecast_v1");
+    assert.equal(forecast.probability, 0.22);
+    assert.equal(evidence.researchRunId, researchRunId);
+    assert.equal(evidence.evidenceItemCount, 2);
+    assert.equal(evidence.supportsNoCount, 1);
+    assert.equal(evidence.contaminationGuard, "passed_no_venue_price_terms_or_flags");
+    assert.equal((forecast.numericalChecks as string[]).includes(`research_run_id:${researchRunId}`), true);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 5,
+      persist: false,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+
+    assert.equal(result.summary.proposedOrders, 1);
+    assert.equal(result.candidates[0]?.action, "paper_buy_yes");
+    assert.equal(result.candidates[0]?.blockers.includes("independent_forecast_low_confidence_screening"), false);
+  });
+});
+
+test("forecast writer refuses contaminated research and keeps screening fallback", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:contaminated-research",
+      conditionId: "contaminated-research",
+      slug: "contaminated-research",
+      title: "Will contaminated research be ignored?",
+      tags: ["test"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.1, 0.9],
+      clobTokenIds: ["yes", "no"],
+      yesTokenId: "yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 25_000,
+      impliedProb: 0.1,
+      bestBid: 0.1,
+      bestAsk: 0.11,
+      midpoint: 0.105,
+      spreadCents: 1,
+      structuralType: "single-binary",
+      categoryGroup: "politics",
+      modelabilityScore: 80,
+      catalystScore: 80,
+      resolutionAmbiguityScore: 20,
+      riskScore: 10,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: 90,
+      tradabilityScore: 90,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {}
+    }]);
+    store.recordResearchRun({
+      marketKey: "condition:contaminated-research",
+      title: "Contaminated research fixture",
+      question: "Will contaminated research be ignored?",
+      thesis: "The forecast copies the Polymarket odds and is therefore not independent.",
+      fairValueLow: 0.5,
+      fairValueBase: 0.8,
+      fairValueHigh: 0.9,
+      supportsYes: [
+        {
+          source: "venue-price-note",
+          title: "Polymarket price moved up",
+          summary: "This uses Polymarket odds as fair-value evidence.",
+          stance: "supports_yes",
+          confidence: "0.9"
+        }
+      ],
+      supportsNo: [
+        {
+          source: "counter-source",
+          title: "Counter evidence",
+          summary: "Counter evidence exists but does not remove contamination.",
+          stance: "supports_no",
+          confidence: "0.6"
+        }
+      ],
+      providers: ["venue-price-note"],
+      completedAt: now.toISOString()
+    });
+
+    const writerResult = runIndependentForecastWriter(store, { runId, now, limit: 10 });
+    assert.equal(writerResult.written, 1);
+    assert.equal(writerResult.forecasts[0]?.method, "screening_forecast_v0");
+
+    const market = store.getUniverseMarket(runId, "condition:contaminated-research");
+    const forecast = (market?.rawJson as Record<string, unknown>).independentForecast as Record<string, unknown>;
+    assert.equal(forecast.method, "screening_forecast_v0");
+    assert.notEqual(forecast.probability, 0.8);
+  });
+});
+
 test("forecast writer lets paper auto-trader propose entries under forecast gate", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-25T12:00:00.000Z");
