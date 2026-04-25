@@ -140,6 +140,8 @@ Use `run_auto_trading_executor` to process pending live-mode decisions in batche
 
 Use `npm run smoke:autotrader-mcp` to run a no-submit MCP smoke: seed an ending-soon universe, start a tiny `live_guarded` session, dry-run executor eligibility, create one guarded preview, and assert that zero orders were submitted.
 
+Use `npm run autotrader:heartbeat` for the recurring no-submit runner. It resumes an active named `live_guarded` session when available, otherwise starts a new 24-hour aggressive mandate, refreshes the composite universe, runs one planning iteration, dry-runs executor eligibility, creates at most one guarded preview, and asserts zero submitted orders.
+
 ## MCP Tool Surface
 
 The bundled MCP server currently exposes:
@@ -167,6 +169,7 @@ The bundled MCP server currently exposes:
 - `get_bet_candidates`
 - `get_universe_event_clusters`
 - `get_auto_trading_session`
+- `list_auto_trading_sessions`
 - `get_auto_trading_execution_gate`
 - `execute_auto_trading_decision`
 - `run_auto_trading_executor`

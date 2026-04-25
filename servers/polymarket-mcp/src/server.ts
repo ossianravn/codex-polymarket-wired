@@ -59,6 +59,7 @@ import {
 import { TOOLS } from "./tool-specs.js";
 import {
   openStateStore,
+  type StoredAutoTradingSessionRecord,
   type StoredAutoTradingDecisionRecord,
   type StoredUniverseMarketInput
 } from "../../../packages/state-store/src/index.js";
@@ -124,6 +125,22 @@ function compactStoredAutoTradingDecision(decision: StoredAutoTradingDecisionRec
       liveSubmissionEnabled: decision.payload.liveSubmissionEnabled
     },
     createdAt: decision.createdAt
+  };
+}
+
+function compactStoredAutoTradingSession(session: StoredAutoTradingSessionRecord): Record<string, unknown> {
+  return {
+    sessionId: session.sessionId,
+    name: session.name,
+    status: session.status,
+    mode: session.mode,
+    riskProfile: session.riskProfile,
+    budgetUsdc: session.budgetUsdc,
+    timeframeHours: session.timeframeHours,
+    startedAt: session.startedAt,
+    endsAt: session.endsAt,
+    heartbeatMinutes: session.heartbeatMinutes,
+    updatedAt: session.updatedAt
   };
 }
 
@@ -1705,6 +1722,33 @@ server.registerTool(
     });
     const response = input.compact ? compactAutoTradingIterationResult(result) : result;
     return textResult(response as unknown as Record<string, unknown>);
+  }
+);
+
+server.registerTool(
+  "list_auto_trading_sessions",
+  {
+    description: toolDescription("list_auto_trading_sessions"),
+    inputSchema: {
+      status: z.enum(["active", "paused", "completed", "stopped"]).optional(),
+      mode: z.enum(["paper", "live_guarded", "live_autonomous"]).optional(),
+      include_expired: z.boolean().default(true),
+      limit: z.number().int().min(1).max(200).default(50)
+    }
+  },
+  async (input) => {
+    const config = loadRuntimeConfig();
+    const store = currentStateStore(config);
+    const now = Date.now();
+    const sessions = store
+      .listAutoTradingSessions({ status: input.status, limit: input.limit })
+      .filter((session) => !input.mode || session.mode === input.mode)
+      .filter((session) => input.include_expired || Date.parse(session.endsAt) > now);
+    return textResult({
+      stateDbPath: config.stateDbPath,
+      count: sessions.length,
+      sessions: sessions.map(compactStoredAutoTradingSession)
+    });
   }
 );
 

@@ -324,6 +324,22 @@ export const TOOLS: ToolSpec[] = [
     }
   },
   {
+    name: "list_auto_trading_sessions",
+    access: "read",
+    description:
+      "List persisted autonomous trading sessions so scheduled runners can resume an existing mandate instead of creating duplicates.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        status: { type: "string", enum: ["active", "paused", "completed", "stopped"] },
+        mode: { type: "string", enum: ["paper", "live_guarded", "live_autonomous"] },
+        include_expired: { type: "boolean", default: true },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 50 }
+      }
+    }
+  },
+  {
     name: "get_auto_trading_session",
     access: "read",
     description:
