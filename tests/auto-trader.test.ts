@@ -383,6 +383,91 @@ test("auto-trader blocks heuristic-only entries until independent fair value exi
   });
 });
 
+test("auto-trader watches valid forecasts when edge is below minimum", async () => {
+  await withTempStore((store) => {
+    const now = new Date("2026-04-24T12:00:00.000Z");
+    const runId = store.startUniverseRun({
+      source: "markets_keyset",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey: "condition:no-edge",
+      conditionId: "no-edge",
+      slug: "no-edge",
+      title: "High-scoring market with valid forecast but no edge",
+      category: "politics",
+      tags: ["politics"],
+      outcomes: ["Yes", "No"],
+      outcomePrices: [0.42, 0.58],
+      clobTokenIds: ["condition:no-edge:yes", "condition:no-edge:no"],
+      yesTokenId: "condition:no-edge:yes",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      enableOrderBook: true,
+      endDate: isoAfter(now, 12),
+      liquidityUsd: 50_000,
+      volume24hUsd: 10_000,
+      impliedProb: 0.42,
+      bestBid: 0.42,
+      bestAsk: 0.44,
+      midpoint: 0.43,
+      spreadCents: 2,
+      categoryGroup: "politics",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      priceBucket: "balanced-30-70c",
+      liquidityBucket: "tradable",
+      spreadBucket: "normal-1-3c",
+      opportunityMode: "execution-ready",
+      modelabilityScore: 85,
+      tradabilityScore: 90,
+      catalystScore: 90,
+      resolutionAmbiguityScore: 20,
+      attentionGapScore: 70,
+      crossMarketScore: 30,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: 95,
+      makerScore: 50,
+      riskScore: 10,
+      reasonCodes: ["defined_catalyst_window"],
+      disqualifiers: [],
+      rawJson: independentForecastRawJson(0.42, {
+        probability: 0.46,
+        uncertainty: 0.01,
+        forecastedAt: now.toISOString(),
+        expiresAt: isoAfter(now, 24)
+      })
+    }]);
+
+    const result = runAutoTradingIteration(store, {
+      now,
+      limit: 4,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+
+    const decision = result.candidates.find((candidate) => candidate.marketKey === "condition:no-edge");
+    assert.equal(decision?.action, "monitor");
+    assert.equal(decision?.status, "watch");
+    assert.equal(decision?.blockers.includes("forecast_edge_below_minimum"), true);
+    assert.equal(result.summary.researchRequests, 0);
+    assert.equal(result.researchRequests.length, 0);
+    assert.equal(result.summary.proposedOrders, 0);
+    assert.equal(result.ledger.fills.length, 0);
+  });
+});
+
 test("auto-trader persists paper fills and spends from ledger on later iterations", async () => {
   await withTempStore((store) => {
     const now = new Date("2026-04-24T12:00:00.000Z");

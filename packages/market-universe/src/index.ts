@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import process from "node:process";
 
 import YAML from "yaml";
 
@@ -1719,17 +1720,31 @@ function buildEndpointUrl(baseUrl: string, endpointPath: string): URL {
 }
 
 async function requestJson<T>(url: URL): Promise<T> {
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "codex-polymarket/market-universe"
+  const configuredTimeoutMs = Number(process.env.POLYMARKET_UNIVERSE_REQUEST_TIMEOUT_MS ?? "20000");
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 20_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "codex-polymarket/market-universe"
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status} for ${url.toString()}: ${body.slice(0, 300)}`);
     }
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`HTTP ${response.status} for ${url.toString()}: ${body.slice(0, 300)}`);
+    return (await response.json()) as T;
+  } catch (error) {
+    if ((error as { name?: string }).name === "AbortError") {
+      throw new Error(`Request timed out after ${timeoutMs}ms for ${url.toString()}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return (await response.json()) as T;
 }
 
 function parseKeysetPayload(raw: unknown): { items: unknown[]; nextCursor?: string } {

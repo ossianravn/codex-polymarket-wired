@@ -333,6 +333,25 @@ function validateSourcePackPlan(
   };
 }
 
+function compactTemplates(templates: ResearchRequestEvidenceTemplate[]): Array<Record<string, unknown>> {
+  return templates.map((template) => ({
+    marketKey: template.marketKey,
+    title: template.title,
+    question: template.researchQuestion,
+    priority: template.priority,
+    dueAt: template.dueAt,
+    endDate: template.marketContext.endDate,
+    outcomes: template.marketContext.outcomes,
+    eventTitle: template.marketContext.eventTitle,
+    eventSlug: template.marketContext.eventSlug,
+    categoryGroup: template.marketContext.categoryGroup,
+    structuralType: template.marketContext.structuralType,
+    resolutionText: template.marketContext.resolutionText,
+    reasonCodes: template.reasonCodes.slice(0, 12),
+    forecastBlockers: template.forecastBlockers
+  }));
+}
+
 function makeResearchPrompt(templates: ResearchRequestEvidenceTemplate[]): string {
   return [
     "You are an independent research forecaster for a paper-only Polymarket autotrader.",
@@ -341,8 +360,8 @@ function makeResearchPrompt(templates: ResearchRequestEvidenceTemplate[]): strin
     "If you cannot form a source-backed forecast for a template, omit that template rather than fabricating evidence.",
     "Each source pack must include a probability interval, at least one supports_yes item, at least one supports_no item, numericalAnchors, and a counterCase.",
     "",
-    "Pending research templates:",
-    JSON.stringify(templates, null, 2)
+    "Compact pending research templates:",
+    JSON.stringify(compactTemplates(templates), null, 2)
   ].join("\n");
 }
 

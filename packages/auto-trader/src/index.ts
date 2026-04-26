@@ -2350,9 +2350,14 @@ export function runAutoTradingIteration(
         action = "skip";
         status = "blocked";
       } else if (score >= RISK_DEFAULTS[mandate.riskProfile].proposalThreshold && targetPrice !== undefined && tokenId) {
-        if (forecastGate.blockers.length > 0) {
+        const researchBlockers = forecastResearchBlockers(forecastGate.blockers);
+        if (researchBlockers.length > 0) {
           action = "research_required";
           status = "research";
+          blockers.push(...forecastGate.blockers);
+        } else if (forecastGate.blockers.length > 0) {
+          action = "monitor";
+          status = "watch";
           blockers.push(...forecastGate.blockers);
         } else if (reentryBlocker) {
           action = "monitor";
