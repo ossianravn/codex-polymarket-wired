@@ -20,11 +20,13 @@ Implemented:
 - Research-request payloads for forecast-blocked candidates.
 - Research-request worker that records research runs only from independent evidence bundles.
 - Venue-price contamination checks for research evidence.
+- Daemon-integrated research source-pack provider with fail-open error reporting.
+- Timeout-safe universe discovery requests.
 - Automation gate that can remain quiet until the session is due.
 
-Not production-ready:
+Still not production-ready:
 
-- Real autonomous evidence gathering from external sources.
+- Reliable unattended external-source research in this local environment unless an agent provider is configured and responsive.
 - Full kill switch and pause/resume tools.
 - Daily loss enforcement separate from session stop-loss.
 - Full reconciliation jobs.
@@ -95,6 +97,25 @@ If the agent cannot produce source-backed packs quickly, fail fast and use the m
 
 ```powershell
 node --import tsx .\scripts\autotrader-research-provider.ts --session-id <session-id> --template-file .\state\paper-research-template.json --source-provider codex_cli --agent-timeout-ms 60000 --limit 2 --record --write-forecasts --json
+```
+
+The daemon can also invoke the research provider directly. This keeps the automation self-contained: provider failures are written into `researchAgent` and do not stop the paper heartbeat.
+
+```powershell
+$env:POLYMARKET_ENABLE_TRADING='false'
+$env:AUTOTRADER_RESEARCH_AGENT_PROVIDER='openai'
+$env:AUTOTRADER_RESEARCH_AGENT_MODEL='gpt-5.4-mini'
+$env:AUTOTRADER_RESEARCH_AGENT_TIMEOUT_MS='90000'
+$env:AUTOTRADER_RESEARCH_AGENT_LIMIT='1'
+node --import tsx .\scripts\autotrader-daemon.ts --once --session-id <session-id> --mode paper --research-source-provider openai --json
+```
+
+For a quick no-enrichment discovery refresh that avoids long heartbeat stalls:
+
+```powershell
+$env:POLYMARKET_ENABLE_TRADING='false'
+$env:POLYMARKET_UNIVERSE_REQUEST_TIMEOUT_MS='10000'
+node --import tsx .\scripts\universe-discovery.ts --source gamma_markets --limit-pages 1 --page-size 50 --enrich-top-n 0 --enrichment-profile none
 ```
 
 4. Record the evidence bundle as a research run.

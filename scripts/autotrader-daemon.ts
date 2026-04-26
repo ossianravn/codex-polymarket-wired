@@ -14,11 +14,16 @@ import {
   runAutoTradingIteration,
   runIndependentForecastWriter,
   runResearchEvidencePipeline,
+  buildResearchEvidenceTemplate,
   type AutoTradingAgentDecisionPlan,
   type AutoTradingSnapshotRefreshResult,
   type AutoTradingMandateInput,
   type ResearchSourcePack
 } from "../packages/auto-trader/src/index.js";
+import {
+  generateResearchSourcePacks,
+  type ResearchAgentCommandOptions
+} from "./autotrader-research-agent-command.js";
 import {
   ingestUniverseMarkets,
   loadDiscoveryPolicies,
@@ -58,6 +63,12 @@ export interface AutotraderDaemonOptions {
   refreshSnapshotLimit?: number;
   refreshSnapshotMaxAgeMinutes?: number;
   researchSourceFile?: string;
+  researchSourceProvider?: ResearchAgentCommandOptions["provider"];
+  researchAgentModel?: string;
+  researchAgentTimeoutMs?: number;
+  researchAgentLimit?: number;
+  researchAgentCodexBin?: string;
+  researchAgentCodexProfile?: string;
   maxUniverseAgeMinutes?: number;
   universeSource?: UniverseSource;
   universePageSize?: number;
@@ -128,6 +139,22 @@ function envBoolean(name: string, fallback: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
+function envStringArray(name: string): string[] {
+  const value = envString(name);
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed;
+    }
+  } catch {
+    // Fall back to whitespace splitting for simple local command wrappers.
+  }
+  return value.split(/\s+/u).map((item) => item.trim()).filter(Boolean);
+}
+
 function readArgValue(argv: string[], index: number): string | undefined {
   const arg = argv[index];
   const equals = arg.indexOf("=");
@@ -165,6 +192,12 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     refreshSnapshotLimit: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_LIMIT", 50),
     refreshSnapshotMaxAgeMinutes: envNumber("AUTOTRADER_REFRESH_SNAPSHOT_MAX_AGE_MINUTES", 5),
     researchSourceFile: envString("AUTOTRADER_RESEARCH_SOURCE_FILE"),
+    researchSourceProvider: envString("AUTOTRADER_RESEARCH_AGENT_PROVIDER") as ResearchAgentCommandOptions["provider"] | undefined,
+    researchAgentModel: envString("AUTOTRADER_RESEARCH_AGENT_MODEL"),
+    researchAgentTimeoutMs: envNumber("AUTOTRADER_RESEARCH_AGENT_TIMEOUT_MS", 90_000),
+    researchAgentLimit: envNumber("AUTOTRADER_RESEARCH_AGENT_LIMIT", 3),
+    researchAgentCodexBin: envString("AUTOTRADER_CODEX_BIN", "codex"),
+    researchAgentCodexProfile: envString("AUTOTRADER_CODEX_PROFILE"),
     maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
     universeSource: envString("AUTOTRADER_UNIVERSE_SOURCE") as UniverseSource | undefined,
     universePageSize: envNumber("AUTOTRADER_UNIVERSE_PAGE_SIZE", 250),
@@ -245,6 +278,24 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     } else if (arg === "--research-source-file" || arg.startsWith("--research-source-file=")) {
       options.researchSourceFile = readArgValue(argv, index);
       if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-source-provider" || arg.startsWith("--research-source-provider=")) {
+      options.researchSourceProvider = readArgValue(argv, index) as ResearchAgentCommandOptions["provider"];
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-agent-model" || arg.startsWith("--research-agent-model=")) {
+      options.researchAgentModel = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-agent-timeout-ms" || arg.startsWith("--research-agent-timeout-ms=")) {
+      options.researchAgentTimeoutMs = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-agent-limit" || arg.startsWith("--research-agent-limit=")) {
+      options.researchAgentLimit = Number(readArgValue(argv, index));
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-agent-codex-bin" || arg.startsWith("--research-agent-codex-bin=")) {
+      options.researchAgentCodexBin = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-agent-codex-profile" || arg.startsWith("--research-agent-codex-profile=")) {
+      options.researchAgentCodexProfile = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--max-universe-age-minutes" || arg.startsWith("--max-universe-age-minutes=")) {
       options.maxUniverseAgeMinutes = Number(readArgValue(argv, index));
       if (consumedNext(argv, index)) index += 1;
@@ -287,6 +338,8 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
   options.agentCommandTimeoutMs = Math.max(1_000, Math.min(10 * 60_000, Number(options.agentCommandTimeoutMs ?? 120_000)));
   options.refreshSnapshotLimit = Math.max(1, Math.min(250, Number(options.refreshSnapshotLimit ?? 50)));
   options.refreshSnapshotMaxAgeMinutes = Math.max(0, Math.min(24 * 60, Number(options.refreshSnapshotMaxAgeMinutes ?? 5)));
+  options.researchAgentTimeoutMs = Math.max(1_000, Math.min(10 * 60_000, Number(options.researchAgentTimeoutMs ?? 90_000)));
+  options.researchAgentLimit = Math.max(1, Math.min(20, Number(options.researchAgentLimit ?? 3)));
   options.maxUniverseAgeMinutes = Math.max(1, Math.min(24 * 60, Number(options.maxUniverseAgeMinutes ?? 10)));
   options.universePageSize = Math.max(25, Math.min(1_000, Number(options.universePageSize ?? 250)));
   options.universeLimitPages = Math.max(1, Math.min(100, Number(options.universeLimitPages ?? 1)));
@@ -312,6 +365,92 @@ async function loadResearchSourcePacks(filePath: string | undefined): Promise<Re
     return undefined;
   }
   return sourcePacksFromJson(JSON.parse(await readFile(absolutePath(filePath), "utf8")) as unknown);
+}
+
+async function resolveResearchSourcePacks(
+  store: StateStore,
+  session: StoredAutoTradingSessionRecord,
+  options: AutotraderDaemonOptions,
+  now: Date
+): Promise<{
+  sourcePacks?: ResearchSourcePack[];
+  agent?: Record<string, unknown>;
+}> {
+  const fileSourcePacks = await loadResearchSourcePacks(options.researchSourceFile);
+  if (fileSourcePacks) {
+    return {
+      sourcePacks: fileSourcePacks,
+      agent: {
+        configured: true,
+        provider: "source_file",
+        status: "loaded",
+        sourcePacks: fileSourcePacks.length,
+        filePath: options.researchSourceFile
+      }
+    };
+  }
+  if (!options.researchSourceProvider) {
+    return {
+      agent: {
+        configured: false
+      }
+    };
+  }
+  const templates = buildResearchEvidenceTemplate(store, {
+    sessionId: session.sessionId,
+    limit: options.researchAgentLimit ?? options.limit,
+    now
+  });
+  if (templates.templates.length === 0) {
+    return {
+      sourcePacks: [],
+      agent: {
+        configured: true,
+        provider: options.researchSourceProvider,
+        status: "skipped",
+        reason: "no_pending_research_templates",
+        scannedTemplates: 0
+      }
+    };
+  }
+  try {
+    const plan = await generateResearchSourcePacks(templates, {
+      provider: options.researchSourceProvider,
+      model: options.researchAgentModel ?? (options.researchSourceProvider === "openai" ? "gpt-5.4-mini" : "gpt-5.2"),
+      apiKey: process.env.OPENAI_API_KEY,
+      apiBaseUrl: process.env.AUTOTRADER_RESEARCH_AGENT_API_BASE_URL ?? "https://api.openai.com/v1/responses",
+      codexBin: options.researchAgentCodexBin ?? "codex",
+      codexPrefixArgs: envStringArray("AUTOTRADER_CODEX_PREFIX_ARGS"),
+      codexProfile: options.researchAgentCodexProfile,
+      timeoutMs: options.researchAgentTimeoutMs ?? 90_000,
+      limit: options.researchAgentLimit ?? options.limit
+    });
+    return {
+      sourcePacks: plan.sourcePacks,
+      agent: {
+        configured: true,
+        provider: options.researchSourceProvider,
+        status: "completed",
+        model: options.researchAgentModel,
+        generatedAt: plan.generatedAt,
+        scannedTemplates: templates.templates.length,
+        sourcePacks: plan.sourcePacks.length
+      }
+    };
+  } catch (error) {
+    return {
+      sourcePacks: [],
+      agent: {
+        configured: true,
+        provider: options.researchSourceProvider,
+        status: "failed",
+        model: options.researchAgentModel,
+        scannedTemplates: templates.templates.length,
+        sourcePacks: 0,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    };
+  }
 }
 
 async function loadAgentDecisionPlan(filePath: string | undefined): Promise<AutoTradingAgentDecisionPlan | undefined> {
@@ -862,7 +1001,6 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
   const store = openStateStore(options.stateDbPath);
   const startedAt = now.toISOString();
   const observations: Record<string, unknown>[] = [];
-  const researchSourcePacks = await loadResearchSourcePacks(options.researchSourceFile);
   try {
     for (const session of sessionsToCheck(store, options)) {
       assertSafeMode(options, session);
@@ -886,12 +1024,13 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         options,
         decisionNow
       );
-      const researchPipeline = researchSourcePacks && researchSourcePacks.length > 0
+      const researchSource = await resolveResearchSourcePacks(store, session, options, decisionNow);
+      const researchPipeline = researchSource.sourcePacks && researchSource.sourcePacks.length > 0
         ? runResearchEvidencePipeline(store, {
           sessionId: session.sessionId,
           limit: options.limit,
           now: decisionNow,
-          sourcePacks: researchSourcePacks,
+          sourcePacks: researchSource.sourcePacks,
           automationName: "autotrader-daemon"
         })
         : undefined;
@@ -954,6 +1093,7 @@ export async function runDaemonOnce(options: AutotraderDaemonOptions, now = new 
         iterationId: iteration.iterationId,
         universeRefresh,
         snapshotRefresh,
+        researchAgent: researchSource.agent,
         researchPipeline,
         forecastWriter,
         agentLoop: options.agentLoop

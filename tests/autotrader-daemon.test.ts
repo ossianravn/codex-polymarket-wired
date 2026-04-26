@@ -65,6 +65,7 @@ test("daemon argument parser defaults to paper loop and supports once mode", () 
   assert.equal(options.refreshSnapshotLimit, 50);
   assert.equal(options.refreshSnapshotMaxAgeMinutes, 5);
   assert.equal(options.researchSourceFile, undefined);
+  assert.equal(options.researchSourceProvider, undefined);
   assert.equal(options.stateDbPath, "state/test.sqlite");
 });
 
@@ -299,6 +300,167 @@ test("daemon once records source-pack research and upgrades forecasts before pla
       assert.equal(forecast.method, "deep_research_forecast_v1");
     } finally {
       verifyStore.close();
+    }
+  });
+});
+
+test("daemon research agent failures are recorded without blocking paper planning", async () => {
+  await withTempDir(async (dir) => {
+    const now = new Date("2026-04-25T12:00:00.000Z");
+    const dbPath = path.join(dir, "state.sqlite");
+    const marketKey = "condition:daemon-agent-fail-open";
+    const store = openStateStore(dbPath);
+    const runId = store.startUniverseRun({
+      source: "test",
+      activeOnly: true,
+      closedIncluded: false,
+      status: "completed",
+      startedAt: now.toISOString(),
+      completedAt: now.toISOString()
+    });
+    store.recordUniverseMarkets(runId, [{
+      runId,
+      marketKey,
+      conditionId: "daemon-agent-fail-open",
+      title: "Daemon agent fail-open market",
+      outcomes: ["Yes", "No"],
+      clobTokenIds: ["yes-token", "no-token"],
+      yesTokenId: "yes-token",
+      noTokenId: "no-token",
+      active: true,
+      closed: false,
+      acceptingOrders: true,
+      endDate: new Date(now.getTime() + 12 * 60 * 60_000).toISOString(),
+      liquidityUsd: 25_000,
+      volume24hUsd: 5_000,
+      impliedProb: 0.24,
+      bestBid: 0.23,
+      bestAsk: 0.24,
+      midpoint: 0.235,
+      spreadCents: 1,
+      categoryGroup: "politics",
+      structuralType: "single-binary",
+      horizonBucket: "resolves-today",
+      opportunityMode: "resolution-watch",
+      tradabilityScore: 90,
+      researchPriorityScore: 90,
+      tradeOpportunityScore: 95,
+      resolutionAmbiguityScore: 10,
+      reasonCodes: ["clear_resolution_text"],
+      disqualifiers: [],
+      rawJson: {},
+      capturedAt: now.toISOString()
+    }]);
+    store.createAutoTradingSession({
+      sessionId: "daemon-agent-fail-open-session",
+      name: "daemon agent fail-open test",
+      status: "active",
+      mode: "paper",
+      riskProfile: "aggressive",
+      budgetUsdc: 30,
+      timeframeHours: 24,
+      startedAt: now.toISOString(),
+      endsAt: new Date(now.getTime() + 24 * 60 * 60_000).toISOString(),
+      heartbeatMinutes: 15,
+      mandate: {
+        budgetUsdc: 30,
+        timeframeHours: 24,
+        riskProfile: "aggressive",
+        mode: "paper"
+      }
+    });
+    store.recordAutoTradingDecision({
+      sessionId: "daemon-agent-fail-open-session",
+      iterationId: "iteration-1",
+      marketKey,
+      title: "Daemon agent fail-open market",
+      action: "research_required",
+      status: "research",
+      score: 91,
+      reasonCodes: ["forecast_gate:screening_only"],
+      blockers: ["independent_forecast_screening_only"],
+      payload: {
+        researchRequest: {
+          requestId: "research:daemon-fail-open",
+          createdAt: now.toISOString(),
+          dueAt: new Date(now.getTime() + 30 * 60_000).toISOString(),
+          priority: "high",
+          marketKey,
+          title: "Daemon agent fail-open market",
+          score: 91,
+          forecastBlockers: ["independent_forecast_screening_only"],
+          reasonCodes: ["forecast_gate:screening_only"],
+          requiredArtifact: {
+            method: "deep_research_forecast_v1",
+            minimumEvidenceItems: 2,
+            requiresCounterEvidence: true,
+            requiredFields: ["fairValueLow", "fairValueBase", "fairValueHigh"],
+            forbiddenEvidence: ["Polymarket odds", "venue price", "orderbook"],
+            freshnessHours: 24
+          },
+          researchQuestion: "Will Daemon agent fail-open market resolve YES?",
+          marketContext: {
+            categoryGroup: "politics",
+            structuralType: "single-binary",
+            opportunityMode: "resolution-watch",
+            horizonBucket: "resolves-today",
+            endDate: new Date(now.getTime() + 12 * 60 * 60_000).toISOString(),
+            outcomes: ["Yes", "No"],
+            reasonCodes: ["clear_resolution_text"]
+          }
+        }
+      }
+    });
+    store.close();
+
+    const previousTradingFlag = process.env.POLYMARKET_ENABLE_TRADING;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.POLYMARKET_ENABLE_TRADING = "false";
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const options: AutotraderDaemonOptions = {
+        sessionId: "daemon-agent-fail-open-session",
+        mode: "paper",
+        loop: false,
+        intervalSeconds: 30,
+        respectNextRunAt: false,
+        schedulerSlackSeconds: 30,
+        limit: 10,
+        autoForecast: true,
+        autoRefreshUniverse: false,
+        autoRefreshSnapshots: false,
+        researchSourceProvider: "openai",
+        researchAgentModel: "gpt-test",
+        researchAgentTimeoutMs: 1_000,
+        researchAgentLimit: 1,
+        stateDbPath: dbPath,
+        latestReportPath: path.join(dir, "latest.json"),
+        observationLogPath: path.join(dir, "daemon.jsonl"),
+        lockDir: path.join(dir, "daemon.lock"),
+        staleLockSeconds: 60,
+        json: true
+      };
+      const report = await runDaemonOnce(options, now);
+      const observation = (report.observations as Array<Record<string, unknown>>)[0];
+      const researchAgent = observation?.researchAgent as { status?: string; error?: string; scannedTemplates?: number } | undefined;
+
+      assert.equal(report.ok, true);
+      assert.equal(researchAgent?.status, "failed");
+      assert.equal(researchAgent?.scannedTemplates, 1);
+      assert.match(researchAgent?.error ?? "", /OPENAI_API_KEY/u);
+      assert.equal(observation?.researchPipeline, undefined);
+      assert.equal(report.noSubmitInvariantHeld, true);
+    } finally {
+      if (previousTradingFlag === undefined) {
+        delete process.env.POLYMARKET_ENABLE_TRADING;
+      } else {
+        process.env.POLYMARKET_ENABLE_TRADING = previousTradingFlag;
+      }
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
     }
   });
 });
