@@ -69,6 +69,7 @@ export interface AutotraderDaemonOptions {
   researchAgentLimit?: number;
   researchAgentCodexBin?: string;
   researchAgentCodexProfile?: string;
+  researchAgentCommand?: string;
   maxUniverseAgeMinutes?: number;
   universeSource?: UniverseSource;
   universePageSize?: number;
@@ -198,6 +199,7 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
     researchAgentLimit: envNumber("AUTOTRADER_RESEARCH_AGENT_LIMIT", 3),
     researchAgentCodexBin: envString("AUTOTRADER_CODEX_BIN", "codex"),
     researchAgentCodexProfile: envString("AUTOTRADER_CODEX_PROFILE"),
+    researchAgentCommand: envString("AUTOTRADER_RESEARCH_AGENT_COMMAND"),
     maxUniverseAgeMinutes: envNumber("AUTOTRADER_MAX_UNIVERSE_AGE_MINUTES", 10),
     universeSource: envString("AUTOTRADER_UNIVERSE_SOURCE") as UniverseSource | undefined,
     universePageSize: envNumber("AUTOTRADER_UNIVERSE_PAGE_SIZE", 250),
@@ -295,6 +297,9 @@ export function parseDaemonArgs(argv = process.argv.slice(2)): AutotraderDaemonO
       if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--research-agent-codex-profile" || arg.startsWith("--research-agent-codex-profile=")) {
       options.researchAgentCodexProfile = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--research-agent-command" || arg.startsWith("--research-agent-command=")) {
+      options.researchAgentCommand = readArgValue(argv, index);
       if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--max-universe-age-minutes" || arg.startsWith("--max-universe-age-minutes=")) {
       options.maxUniverseAgeMinutes = Number(readArgValue(argv, index));
@@ -422,6 +427,7 @@ async function resolveResearchSourcePacks(
       codexBin: options.researchAgentCodexBin ?? "codex",
       codexPrefixArgs: envStringArray("AUTOTRADER_CODEX_PREFIX_ARGS"),
       codexProfile: options.researchAgentCodexProfile,
+      command: options.researchAgentCommand,
       timeoutMs: options.researchAgentTimeoutMs ?? 90_000,
       limit: options.researchAgentLimit ?? options.limit
     });
@@ -432,6 +438,7 @@ async function resolveResearchSourcePacks(
         provider: options.researchSourceProvider,
         status: "completed",
         model: options.researchAgentModel,
+        commandConfigured: Boolean(options.researchAgentCommand),
         generatedAt: plan.generatedAt,
         scannedTemplates: templates.templates.length,
         sourcePacks: plan.sourcePacks.length
@@ -445,6 +452,7 @@ async function resolveResearchSourcePacks(
         provider: options.researchSourceProvider,
         status: "failed",
         model: options.researchAgentModel,
+        commandConfigured: Boolean(options.researchAgentCommand),
         scannedTemplates: templates.templates.length,
         sourcePacks: 0,
         error: error instanceof Error ? error.message : String(error)

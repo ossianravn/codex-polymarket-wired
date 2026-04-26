@@ -110,6 +110,13 @@ $env:AUTOTRADER_RESEARCH_AGENT_LIMIT='1'
 node --import tsx .\scripts\autotrader-daemon.ts --once --session-id <session-id> --mode paper --research-source-provider openai --json
 ```
 
+If OpenAI is not configured or Codex CLI is too slow, delegate research to any local command that prints a source-pack plan JSON to stdout. The command receives `AUTOTRADER_RESEARCH_TEMPLATE_FILE` and `AUTOTRADER_RESEARCH_SOURCE_FILE` in its environment and must still avoid venue-price evidence.
+
+```powershell
+$env:POLYMARKET_ENABLE_TRADING='false'
+node --import tsx .\scripts\autotrader-daemon.ts --once --session-id <session-id> --mode paper --research-source-provider command --research-agent-command 'node .\scripts\my-research-agent.mjs' --json
+```
+
 For a quick no-enrichment discovery refresh that avoids long heartbeat stalls:
 
 ```powershell

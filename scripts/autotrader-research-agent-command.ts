@@ -13,7 +13,7 @@ import type {
   ResearchSourcePack
 } from "../packages/auto-trader/src/index.js";
 
-type ResearchAgentProvider = "openai" | "codex_cli";
+type ResearchAgentProvider = "openai" | "codex_cli" | "command";
 
 export interface ResearchAgentCommandOptions {
   provider: ResearchAgentProvider;
@@ -23,6 +23,7 @@ export interface ResearchAgentCommandOptions {
   codexBin: string;
   codexPrefixArgs: string[];
   codexProfile?: string;
+  command?: string;
   templatePath?: string;
   outPath?: string;
   timeoutMs: number;
@@ -85,6 +86,7 @@ export function parseResearchAgentCommandArgs(argv = process.argv.slice(2)): Res
     codexBin: envString("AUTOTRADER_CODEX_BIN", "codex") ?? "codex",
     codexPrefixArgs: envStringArray("AUTOTRADER_CODEX_PREFIX_ARGS"),
     codexProfile: envString("AUTOTRADER_CODEX_PROFILE"),
+    command: envString("AUTOTRADER_RESEARCH_AGENT_COMMAND"),
     templatePath: envString("AUTOTRADER_RESEARCH_TEMPLATE_FILE"),
     outPath: envString("AUTOTRADER_RESEARCH_SOURCE_FILE"),
     timeoutMs: envNumber("AUTOTRADER_RESEARCH_AGENT_TIMEOUT_MS", 180_000),
@@ -108,6 +110,9 @@ export function parseResearchAgentCommandArgs(argv = process.argv.slice(2)): Res
     } else if (arg === "--codex-profile" || arg.startsWith("--codex-profile=")) {
       options.codexProfile = readArgValue(argv, index);
       if (consumedNext(argv, index)) index += 1;
+    } else if (arg === "--command" || arg.startsWith("--command=")) {
+      options.command = readArgValue(argv, index);
+      if (consumedNext(argv, index)) index += 1;
     } else if (arg === "--template-file" || arg === "--template" || arg.startsWith("--template-file=") || arg.startsWith("--template=")) {
       options.templatePath = readArgValue(argv, index);
       if (consumedNext(argv, index)) index += 1;
@@ -125,7 +130,7 @@ export function parseResearchAgentCommandArgs(argv = process.argv.slice(2)): Res
 
   options.timeoutMs = Math.max(1_000, Math.min(10 * 60_000, Number(options.timeoutMs)));
   options.limit = Math.max(1, Math.min(25, Number(options.limit)));
-  if (options.provider !== "openai" && options.provider !== "codex_cli") {
+  if (options.provider !== "openai" && options.provider !== "codex_cli" && options.provider !== "command") {
     throw new Error(`Unsupported AUTOTRADER_RESEARCH_AGENT_PROVIDER '${options.provider}'.`);
   }
   return options;
@@ -452,6 +457,43 @@ async function runCodexCliResearchAgent(options: ResearchAgentCommandOptions, te
   }
 }
 
+async function runCommandResearchAgent(options: ResearchAgentCommandOptions, templates: ResearchRequestEvidenceTemplate[]): Promise<ResearchSourcePackPlan> {
+  if (!options.command) {
+    throw new Error("AUTOTRADER_RESEARCH_AGENT_COMMAND is required for AUTOTRADER_RESEARCH_AGENT_PROVIDER=command.");
+  }
+  const tempDir = await mkdtemp(path.join(tmpdir(), "poly-command-research-agent-"));
+  const templatePath = path.join(tempDir, "research-templates.json");
+  const outputPath = path.join(tempDir, "research-source-packs.json");
+  try {
+    await writeFile(templatePath, `${JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      templates
+    }, null, 2)}\n`, "utf8");
+    const child = spawnSync(options.command, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      shell: true,
+      timeout: options.timeoutMs,
+      env: {
+        ...process.env,
+        POLYMARKET_ENABLE_TRADING: "false",
+        AUTOTRADER_RESEARCH_TEMPLATE_FILE: templatePath,
+        AUTOTRADER_RESEARCH_SOURCE_FILE: outputPath
+      }
+    });
+    if (child.error || child.status !== 0) {
+      const detail = child.error?.message ?? child.stderr?.trim() ?? `exit ${child.status}`;
+      throw new Error(`Command research agent failed: ${detail}`);
+    }
+    const planText = child.stdout.trim()
+      ? child.stdout
+      : await readFile(outputPath, "utf8");
+    return validateSourcePackPlan(parsePlanText(planText), templates);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 export async function generateResearchSourcePacks(
   templates: ResearchEvidenceTemplateResult | ResearchRequestEvidenceTemplate[],
   options: ResearchAgentCommandOptions
@@ -465,9 +507,13 @@ export async function generateResearchSourcePacks(
       sourcePacks: []
     };
   }
-  return options.provider === "codex_cli"
-    ? runCodexCliResearchAgent(options, selectedTemplates)
-    : runOpenAiResearchAgent(options, selectedTemplates);
+  if (options.provider === "codex_cli") {
+    return runCodexCliResearchAgent(options, selectedTemplates);
+  }
+  if (options.provider === "command") {
+    return runCommandResearchAgent(options, selectedTemplates);
+  }
+  return runOpenAiResearchAgent(options, selectedTemplates);
 }
 
 async function main(): Promise<void> {

@@ -199,3 +199,84 @@ writeFileSync(process.argv[outputIndex + 1], JSON.stringify({
     assert.match(String(child.stderr), /venue-price contamination/);
   });
 });
+
+test("research agent command can delegate source packs to a local command provider", async () => {
+  await withTempDir(async (dir) => {
+    const cwd = process.cwd();
+    const templatePath = path.join(dir, "templates.json");
+    const outPath = path.join(dir, "source-packs.json");
+    const fakeAgentPath = path.join(dir, "fake-research-agent.mjs");
+    await writeFile(templatePath, `${JSON.stringify(templateFixture(), null, 2)}\n`, "utf8");
+    await writeFile(fakeAgentPath, `
+import { readFileSync } from "node:fs";
+
+const templateFile = process.env.AUTOTRADER_RESEARCH_TEMPLATE_FILE;
+if (!templateFile) {
+  console.error("missing template env");
+  process.exit(2);
+}
+const templates = JSON.parse(readFileSync(templateFile, "utf8")).templates;
+console.log(JSON.stringify({
+  kind: "polymarket_autotrader_research_source_packs_v1",
+  generatedAt: "2026-04-25T12:00:00.000Z",
+  agentName: "fake-command-research-agent",
+  sourcePacks: [{
+    marketKey: templates[0].marketKey,
+    title: templates[0].title,
+    question: templates[0].researchQuestion,
+    thesis: "Independent command-agent evidence supports YES, with a credible timing counter-case.",
+    fairValueLow: 0.51,
+    fairValueBase: 0.59,
+    fairValueHigh: 0.67,
+    supportsYes: [{
+      source: "Official command source",
+      title: "Official status remains supportive",
+      url: "https://example.com/official-command",
+      summary: "A primary source indicates the relevant condition can complete inside the resolution window.",
+      stance: "supports_yes",
+      confidence: "medium"
+    }],
+    supportsNo: [{
+      source: "Independent command source",
+      title: "A timing dependency remains",
+      url: "https://example.com/independent-command",
+      summary: "A non-venue source identifies unresolved timing risk.",
+      stance: "supports_no",
+      confidence: "medium"
+    }],
+    openQuestions: ["Whether timing risk clears before cutoff."],
+    providers: ["fake-command-research-agent"],
+    notes: "Local command-provider fixture.",
+    completedAt: "2026-04-25T12:00:00.000Z",
+    numericalAnchors: ["Base rate 0.50 adjusted to 0.59 for source evidence and timing risk."],
+    counterCase: "The strongest counter-case is delay beyond cutoff.",
+    sourceCutoff: "2026-04-25T12:00:00.000Z"
+  }]
+}));
+`, "utf8");
+
+    const child = spawnSync(process.execPath, [
+      "--import",
+      "tsx",
+      path.join(cwd, "scripts", "autotrader-research-agent-command.ts"),
+      "--provider=command",
+      `--template-file=${templatePath}`,
+      `--out=${outPath}`,
+      `--command="${process.execPath}" "${fakeAgentPath}"`
+    ], {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        POLYMARKET_ENABLE_TRADING: "false"
+      }
+    });
+
+    assert.equal(child.status, 0, String(child.stderr));
+    const stdoutPlan = JSON.parse(String(child.stdout)) as Record<string, unknown>;
+    const filePlan = JSON.parse(await readFile(outPath, "utf8")) as Record<string, unknown>;
+    const sourcePacks = stdoutPlan.sourcePacks as Array<{ providers?: string[] }>;
+    assert.deepEqual(filePlan, stdoutPlan);
+    assert.equal(sourcePacks[0]?.providers?.[0], "fake-command-research-agent");
+  });
+});
